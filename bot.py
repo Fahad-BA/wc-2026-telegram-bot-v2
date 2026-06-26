@@ -8,7 +8,7 @@ from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command, CommandObject
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from aiogram.utils.keyboard import InlineKeyboardBuilder
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 
 # --- FLAG MAPPING (German names → emoji) ---
 FLAG_MAP = {
@@ -36,6 +36,17 @@ OLDB_SHORTCUT = "wm2026"
 OLDB_SEASON = "2026"
 API_BASE_URL = "https://api.openligadb.de"
 TOURNAMENT_START_DATE = datetime(2026, 6, 11)
+RIYADH_TZ = timezone(timedelta(hours=3))
+
+def riyadh_time(utc_str):
+    """Convert UTC datetime string to Riyadh time string."""
+    if not utc_str:
+        return '—'
+    try:
+        dt = datetime.fromisoformat(utc_str.replace('Z', '+00:00'))
+        return dt.astimezone(RIYADH_TZ).strftime('%H:%M')
+    except:
+        return '—'
 
 # --- DATABASE SETUP ---
 def init_db():
@@ -213,7 +224,8 @@ async def main():
                         results = m.get('matchResults', [])
                         final_res = next((r for r in results if r.get('resultTypeID') == 2), results[0] if results else {})
                         res = f"{final_res.get('pointsTeam1', '?')} - {final_res.get('pointsTeam2', '?')}"
-                        status = "FT" if m.get('matchIsFinished') else "NS"
+                        kickoff = riyadh_time(m.get('matchDateTimeUTC') or m.get('matchDateTime'))
+                        status = "FT" if m.get('matchIsFinished') else kickoff
                         text += f"• `{m['matchID']}`: {flag(m['team1']['teamName'])} {res} {flag(m['team2']['teamName'])} ({status})\n"
                         if not m.get('matchIsFinished'): all_done = False
                     
@@ -231,7 +243,8 @@ async def main():
                 if matches:
                     text = "📅 *مباريات اليوم:*\n\n"
                     for m in matches:
-                        text += f"ID: `{m['matchID']}` | {flag(m['team1']['teamName'])} ضد {flag(m['team2']['teamName'])}\n"
+                        kickoff = riyadh_time(m.get('matchDateTimeUTC') or m.get('matchDateTime'))
+                        text += f"ID: `{m['matchID']}` | {kickoff} | {flag(m['team1']['teamName'])} ضد {flag(m['team2']['teamName'])}\n"
                     await message.answer(text, parse_mode="Markdown")
                     return
             await message.answer("لا توجد مباريات اليوم.")
@@ -277,7 +290,8 @@ async def main():
                         score = f"{final_res.get('pointsTeam1', 0)} - {final_res.get('pointsTeam2', 0)}"
                         await message.answer(f"⚽ *{home} {score} {away}*\n\nلا توجد تفاصيل أهداف متاحة.", parse_mode="Markdown")
                         return
-                    text = f"⚽ *أهداف: {home} ضد {away}*\n\n"
+                    kickoff = riyadh_time(match.get('matchDateTimeUTC') or match.get('matchDateTime'))
+                    text = f"⚽ *أهداف: {home} ضد {away}* ({kickoff} توقيت الرياض)\n\n"
                     for g in goals:
                         scorer = g.get('goalGetterName', 'غير معروف')
                         minute = g.get('goalMatchMinute', '??')
