@@ -316,7 +316,7 @@ async def main():
                             penalty = " (ركلة جزاء)" if g.get('isPenalty', False) else ""
                             own = " (هدف عكسي)" if g.get('isOwnGoal', False) else ""
                             text += f"{side} {home if s1 > s2 else away} ({minute}'){penalty}{own} → {s1}-{s2}\n"
-                        text += "\n_تفاصيل الهدافين ستتوفر عند بدء البطولة_"
+                        text += "\n_⚠️ بيانات الهدافين غير متوفرة في OpenLigaDB لهذه المباراة_"
                     await message.answer(text, parse_mode="Markdown")
                     return
             await message.answer("⚠️ لم يتم العثور على مباراة بهذا الرقم.\nاستخدم /fixtures لعرض المباريات المتاحة.", parse_mode="Markdown")
