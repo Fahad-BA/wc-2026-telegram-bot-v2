@@ -60,24 +60,22 @@ def get_cached_data(endpoint, ttl_minutes=60):
 
     if row:
         data_str, updated_at_str = row
-        # Check if the cached data is empty/null - don't return it as valid cache
         try:
             parsed = json.loads(data_str)
-            if not parsed or not parsed.get('response'):
+            # Ensure we don't return an empty response as valid cache
+            if not parsed or not parsed.get('response') or len(parsed['response']) == 0:
                  return None
         except:
             return None
 
         updated_at = datetime.fromisoformat(updated_at_str)
-        # Use a very large TTL for "infinite" caching
+        # Use a very large TTL for "infinite" caching (-1)
         if ttl_minutes == -1 or (datetime.now() - updated_at < timedelta(minutes=ttl_minutes)):
             return parsed
     return None
 
 def save_cache(endpoint, data):
-    # Never cache empty/error responses indefinitely
-    if not data or not data.get('response'):
-        logging.warning(f"Refusing to cache empty response for {endpoint}")
+    if not data or not data.get('response') or len(data['response']) == 0:
         return
 
     conn = sqlite3.connect('bot.db')
@@ -91,7 +89,6 @@ def save_cache(endpoint, data):
 
 # --- API HELPERS ---
 async def fetch_api(session, endpoint, params=None, use_cache=False, ttl_minutes=60):
-    # Construct a unique cache key that includes all parameters
     param_str = json.dumps(params, sort_keys=True) if params else ""
     cache_key = f"{endpoint}_{param_str}"
     
@@ -107,7 +104,7 @@ async def fetch_api(session, endpoint, params=None, use_cache=False, ttl_minutes
     async with session.get(f"{API_BASE_URL}/{endpoint}", headers=headers, params=params) as response:
         if response.status == 200:
             data = await response.json()
-            if use_cache and data and data.get('response'):
+            if use_cache and data and data.get('response') and len(data['response']) > 0:
                 save_cache(cache_key, data)
             return data
         else:
@@ -182,7 +179,6 @@ async def monitor_world_cup(bot):
     async with aiohttp.ClientSession() as session:
         while True:
             try:
-                # Default sleep interval is 30 minutes (1800 seconds)
                 sleep_interval = 1800
                 today = datetime.now().strftime('%Y-%m-%d')
                 data = await fetch_api(session, "fixtures", {"league": WC_2026_LEAGUE_ID, "season": 2026, "date": today})
@@ -198,11 +194,11 @@ async def monitor_world_cup(bot):
 
                         if is_soon:
                             await broadcast_lineups(bot, session, fixture)
-                            sleep_interval = 60  # Switch to 1 minute polling
+                            sleep_interval = 60
 
                         if is_live:
                             await check_live_events(bot, session, fixture['fixture']['id'])
-                            sleep_interval = 60  # Switch to 1 minute polling
+                            sleep_interval = 60
 
                         if status == 'FT':
                             await broadcast_summary(bot, session, fixture)
@@ -250,25 +246,27 @@ async def main():
     @dp.callback_query(F.data.startswith("date:"))
     async def handle_date_selection(callback: CallbackQuery):
         selected_date_str = callback.data.split(":")[1]
+        params = {"league": WC_2026_LEAGUE_ID, "season": 2026, "date": selected_date_str}
         
         async with aiohttp.ClientSession() as session:
-            # Smart TTL Logic: First check current data with short TTL
-            data = await fetch_api(session, "fixtures", {"league": WC_2026_LEAGUE_ID, "season": 2026, "date": selected_date_str}, use_cache=True, ttl_minutes=10)
+            # 1. First, strictly check the cache for an "infinite" or "fresh" record
+            # We use ttl_minutes=-1 to indicate we want an infinite record if it exists
+            data = get_cached_data(f"fixtures_{json.dumps(params, sort_keys=True)}", ttl_minutes=-1)
             
-            if data and data.get('response'):
+            # 2. If cache miss (none or stale/missing), hit the API
+            if not data:
+                data = await fetch_api(session, "fixtures", params, use_cache=True, ttl_minutes=10)
+            
+            if data and data.get('response') and len(data['response']) > 0:
                 all_finished = True
                 for fixture in data['response']:
                     if fixture['fixture']['status']['short'] not in ['FT', 'AET', 'PEN']:
                         all_finished = False
                         break
                 
-                # If all finished, the date's record is already saved in cache.
-                # Future calls with use_cache=True and ttl_minutes=-1 will use it if we allow it.
-                # Note: fetch_api saved it with standard 10m TTL above.
-                # To make it "infinite" once all finished, we'd need to re-save or use a smarter get.
+                # 3. If all matches are finished, upgrade the record to "infinite" in cache
                 if all_finished:
-                    # Upgrade to infinite in cache
-                    save_cache(f"fixtures_{json.dumps({'date': selected_date_str, 'league': WC_2026_LEAGUE_ID, 'season': 2026}, sort_keys=True)}", data)
+                    save_cache(f"fixtures_{json.dumps(params, sort_keys=True)}", data)
 
                 text = f"📅 *Matches on {selected_date_str}:*\n\n"
                 for f in data['response']:
