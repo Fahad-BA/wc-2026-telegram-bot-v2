@@ -12,26 +12,34 @@ from datetime import datetime, timedelta, timezone
 
 # --- FLAG MAPPING ---
 FLAG_MAP = {
-    'Algerien': '🇩🇿', 'Argentinien': '🇦🇷', 'Australien': '🇦🇺', 'Belgien': '🇧🇪',
-    'Bosnien-Herzegowina': '🇧🇦', 'Brasilien': '🇧🇷', 'Curaçao': '🇨🇼', 'DR Kongo': '🇨🇩',
-    'Deutschland': '🇩🇪', 'Ecuador': '🇪🇨', 'Elfenbeinküste': '🇨🇮', 'England': '🏴󠁧󠁢󠁥󠁮󠁧󠁿',
-    'Frankreich': '🇫🇷', 'Ghana': '🇬🇭', 'Haiti': '🇭🇹', 'Irak': '🇮🇶', 'Iran': '🇮🇷',
-    'Japan': '🇯🇵', 'Jordanien': '🇯🇴', 'Kanada': '🇨🇦', 'Kap Verde': '🇨🇻',
+    # API-Football (English) — primary
+    'Algeria': '🇩🇿', 'Argentina': '🇦🇷', 'Australia': '🇦🇺', 'Austria': '🇦🇹',
+    'Belgium': '🇧🇪', 'Bosnia & Herzegovina': '🇧🇦', 'Brazil': '🇧🇷',
+    'Canada': '🇨🇦', 'Cape Verde Islands': '🇨🇻', 'Colombia': '🇨🇴',
+    'Congo DR': '🇨🇩', 'Croatia': '🇭🇷', 'Curaçao': '🇨🇼', 'Czechia': '🇨🇿',
+    'Ecuador': '🇪🇨', 'Egypt': '🇪🇬', 'England': '🏴󠁧󠁢󠁥󠁮󠁧󠁿', 'France': '🇫🇷',
+    'Germany': '🇩🇪', 'Ghana': '🇬🇭', 'Haiti': '🇭🇹', 'Iran': '🇮🇷',
+    'Iraq': '🇮🇶', 'Ivory Coast': '🇨🇮', 'Japan': '🇯🇵', 'Jordan': '🇯🇴',
+    'Mexico': '🇲🇽', 'Morocco': '🇲🇦', 'Netherlands': '🇳🇱',
+    'New Zealand': '🇳🇿', 'Norway': '🇳🇴', 'Panama': '🇵🇦', 'Paraguay': '🇵🇾',
+    'Portugal': '🇵🇹', 'Qatar': '🇶🇦', 'Saudi Arabia': '🇸🇦',
+    'Scotland': '🏴󠁧󠁢󠁳󠁣󠁴󠁿', 'Senegal': '🇸🇳', 'South Africa': '🇿🇦',
+    'South Korea': '🇰🇷', 'Spain': '🇪🇸', 'Sweden': '🇸🇪', 'Switzerland': '🇨🇭',
+    'Tunisia': '🇹🇳', 'Türkiye': '🇹🇷', 'USA': '🇺🇸', 'Uruguay': '🇺🇾',
+    'Uzbekistan': '🇺🇿',
+    # OpenLigaDB (German) — legacy fallback
+    'Algerien': '🇩🇿', 'Argentinien': '🇦🇷', 'Australien': '🇦🇪', 'Belgien': '🇧🇪',
+    'Bosnien-Herzegowina': '🇧🇦', 'Brasilien': '🇧🇷', 'DR Kongo': '🇨🇩',
+    'Deutschland': '🇩🇪', 'Elfenbeinküste': '🇨🇮', 'Frankreich': '🇫🇷',
+    'Irak': '🇮🇶', 'Jordanien': '🇯🇴', 'Kanada': '🇨🇦', 'Kap Verde': '🇨🇻',
     'Katar': '🇶🇦', 'Kolumbien': '🇨🇴', 'Kroatien': '🇭🇷', 'Marokko': '🇲🇦',
     'Mexiko': '🇲🇽', 'Neuseeland': '🇳🇿', 'Niederlande': '🇳🇱', 'Norwegen': '🇳🇴',
-    'Panama': '🇵🇦', 'Paraguay': '🇵🇾', 'Portugal': '🇵🇹', 'Saudi-Arabien': '🇸🇦',
-    'Schottland': '🏴󠁧󠁢󠁳󠁣󠁴󠁿', 'Schweden': '🇸🇪', 'Schweiz': '🇨🇭', 'Senegal': '🇸🇳',
-    'Spanien': '🇪🇸', 'Südafrika': '🇿🇦', 'Südkorea': '🇰🇷', 'Tschechien': '🇨🇿',
-    'Tunesien': '🇹🇳', 'Türkei': '🇹🇷', 'USA': '🇺🇸', 'Uruguay': '🇺🇾',
-    'Usbekistan': '🇺🇿', 'Ägypten': '🇪🇬', 'Österreich': '🇦🇹',
-    # Added English mappings for API-Football compatibility
-    'Algeria': '🇩🇿', 'Argentina': '🇦🇷', 'Australia': '🇦🇺', 'Belgium': '🇧🇪',
-    'Brazil': '🇧🇷', 'Canada': '🇨🇦', 'Colombia': '🇨🇴', 'Croatia': '🇭🇷',
-    'Egypt': '🇪🇬', 'France': '🇫🇷', 'Germany': '🇩🇪', 'Japan': '🇯🇵',
-    'Mexico': '🇲🇽', 'Morocco': '🇲🇦', 'Netherlands': '🇳🇱', 'Norway': '🇳🇴',
-    'Portugal': '🇵🇹', 'Saudi Arabia': '🇸🇦', 'Spain': '🇪🇸', 'Switzerland': '🇨🇭',
-    'Tunisia': '🇹🇳', 'Uruguay': '🇺🇾', 'USA': '🇺🇸', 'Korea Republic': '🇰🇷'
+    'Österreich': '🇦🇹', 'Saudi-Arabien': '🇸🇦', 'Schweden': '🇸🇪',
+    'Schweiz': '🇨🇭', 'Spanien': '🇪🇸', 'Südafrika': '🇿🇦', 'Südkorea': '🇰🇷',
+    'Tschechien': '🇨🇿', 'Tunesien': '🇹🇳', 'Türkei': '🇹🇷',
+    'Usbekistan': '🇺🇿', 'Ägypten': '🇪🇬',
 }
+
 
 def flag(name):
     return FLAG_MAP.get(name, name)
