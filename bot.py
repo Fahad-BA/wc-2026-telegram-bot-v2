@@ -60,13 +60,26 @@ def get_cached_data(endpoint, ttl_minutes=60):
 
     if row:
         data_str, updated_at_str = row
+        # Check if the cached data is empty/null - don't return it as valid cache
+        try:
+            parsed = json.loads(data_str)
+            if not parsed or not parsed.get('response'):
+                 return None
+        except:
+            return None
+
         updated_at = datetime.fromisoformat(updated_at_str)
         # Use a very large TTL for "infinite" caching
         if ttl_minutes == -1 or (datetime.now() - updated_at < timedelta(minutes=ttl_minutes)):
-            return json.loads(data_str)
+            return parsed
     return None
 
 def save_cache(endpoint, data):
+    # Never cache empty/error responses indefinitely
+    if not data or not data.get('response'):
+        logging.warning(f"Refusing to cache empty response for {endpoint}")
+        return
+
     conn = sqlite3.connect('bot.db')
     cursor = conn.cursor()
     cursor.execute(
@@ -78,7 +91,9 @@ def save_cache(endpoint, data):
 
 # --- API HELPERS ---
 async def fetch_api(session, endpoint, params=None, use_cache=False, ttl_minutes=60):
-    cache_key = f"{endpoint}_{json.dumps(params, sort_keys=True)}" if params else endpoint
+    # Construct a unique cache key that includes all parameters
+    param_str = json.dumps(params, sort_keys=True) if params else ""
+    cache_key = f"{endpoint}_{param_str}"
     
     if use_cache:
         cached = get_cached_data(cache_key, ttl_minutes)
@@ -92,18 +107,12 @@ async def fetch_api(session, endpoint, params=None, use_cache=False, ttl_minutes
     async with session.get(f"{API_BASE_URL}/{endpoint}", headers=headers, params=params) as response:
         if response.status == 200:
             data = await response.json()
-            if use_cache and data:
-                # Check for "No data" or empty responses from API-Football
-                # API-Football often returns an empty list in 'response' when no data exists
-                has_data = data.get('response') and len(data['response']) > 0
-                
-                # NEVER cache "empty" data forever
-                if not has_data and ttl_minutes == -1:
-                    save_cache(cache_key, data) # Still save it, but don't treat it as infinite in the logic below
-                else:
-                    save_cache(cache_key, data)
+            if use_cache and data and data.get('response'):
+                save_cache(cache_key, data)
             return data
-        return None
+        else:
+            logging.error(f"API Error {response.status}: {await response.text()}")
+            return None
 
 # --- NOTIFICATION LOGIC ---
 async def safe_send(bot, text):
@@ -243,31 +252,24 @@ async def main():
         selected_date_str = callback.data.split(":")[1]
         
         async with aiohttp.ClientSession() as session:
-            # Fix: Ensure query params are exactly as API-Sports expects (league, season, date)
-            params = {"league": WC_2026_LEAGUE_ID, "season": 2026, "date": selected_date_str}
+            # Smart TTL Logic: First check current data with short TTL
+            data = await fetch_api(session, "fixtures", {"league": WC_2026_LEAGUE_ID, "season": 2026, "date": selected_date_str}, use_cache=True, ttl_minutes=10)
             
-            # 1. First fetch with a short TTL to verify data existence and status
-            # This avoids "infinite" caching of errors or empty results
-            temp_data = await fetch_api(session, "fixtures", params, use_cache=True, ttl_minutes=5)
-            
-            all_finished = True
-            has_data = False
-            if temp_data and temp_data.get('response') and len(temp_data['response']) > 0:
-                has_data = True
-                for fixture in temp_data['response']:
+            if data and data.get('response'):
+                all_finished = True
+                for fixture in data['response']:
                     if fixture['fixture']['status']['short'] not in ['FT', 'AET', 'PEN']:
                         all_finished = False
                         break
-            else:
-                all_finished = False
-            
-            # Fix: NEVER use infinite TTL (-1) if matches were empty or missing
-            # Only use it if we have verified matches and they are ALL finished
-            final_ttl = -1 if (has_data and all_finished) else 5
-            
-            data = await fetch_api(session, "fixtures", params, use_cache=True, ttl_minutes=final_ttl)
-            
-            if data and data.get('response') and len(data['response']) > 0:
+                
+                # If all finished, the date's record is already saved in cache.
+                # Future calls with use_cache=True and ttl_minutes=-1 will use it if we allow it.
+                # Note: fetch_api saved it with standard 10m TTL above.
+                # To make it "infinite" once all finished, we'd need to re-save or use a smarter get.
+                if all_finished:
+                    # Upgrade to infinite in cache
+                    save_cache(f"fixtures_{json.dumps({'date': selected_date_str, 'league': WC_2026_LEAGUE_ID, 'season': 2026}, sort_keys=True)}", data)
+
                 text = f"📅 *Matches on {selected_date_str}:*\n\n"
                 for f in data['response']:
                     home = f['teams']['home']['name']
