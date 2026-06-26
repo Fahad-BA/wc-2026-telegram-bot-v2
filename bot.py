@@ -10,6 +10,25 @@ from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQu
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from datetime import datetime, timedelta
 
+# --- FLAG MAPPING (German names → emoji) ---
+FLAG_MAP = {
+    'Algerien': '🇩🇿', 'Argentinien': '🇦🇷', 'Australien': '🇦🇺', 'Belgien': '🇧🇪',
+    'Bosnien-Herzegowina': '🇧🇦', 'Brasilien': '🇧🇷', 'Curaçao': '🇨🇼', 'DR Kongo': '🇨🇩',
+    'Deutschland': '🇩🇪', 'Ecuador': '🇪🇨', 'Elfenbeinküste': '🇨🇮', 'England': '🏴󠁧󠁢󠁥󠁮󠁧󠁿',
+    'Frankreich': '🇫🇷', 'Ghana': '🇬🇭', 'Haiti': '🇭🇹', 'Irak': '🇮🇶', 'Iran': '🇮🇷',
+    'Japan': '🇯🇵', 'Jordanien': '🇯🇴', 'Kanada': '🇨🇦', 'Kap Verde': '🇨🇻',
+    'Katar': '🇶🇦', 'Kolumbien': '🇨🇴', 'Kroatien': '🇭🇷', 'Marokko': '🇲🇦',
+    'Mexiko': '🇲🇽', 'Neuseeland': '🇳🇿', 'Niederlande': '🇳🇱', 'Norwegen': '🇳🇴',
+    'Panama': '🇵🇦', 'Paraguay': '🇵🇾', 'Portugal': '🇵🇹', 'Saudi-Arabien': '🇸🇦',
+    'Schottland': '🏴󠁧󠁢󠁳󠁣󠁴󠁿', 'Schweden': '🇸🇪', 'Schweiz': '🇨🇭', 'Senegal': '🇸🇳',
+    'Spanien': '🇪🇸', 'Südafrika': '🇿🇦', 'Südkorea': '🇰🇷', 'Tschechien': '🇨🇿',
+    'Tunesien': '🇹🇳', 'Türkei': '🇹🇷', 'USA': '🇺🇸', 'Uruguay': '🇺🇾',
+    'Usbekistan': '🇺🇿', 'Ägypten': '🇪🇬', 'Österreich': '🇦🇹',
+}
+
+def flag(name):
+    return FLAG_MAP.get(name, name)
+
 # --- CONFIGURATION ---
 BOT_TOKEN = "8876705370:AAEGmWOMaTjOflAy7myAWMouVoBn8_kHais"
 USER_ID = 697241718  # Direct messages to this User ID
@@ -119,8 +138,8 @@ async def broadcast_summary(bot, session, match):
     if is_processed('processed_summaries', match_id):
         return
 
-    home_name = match['team1']['teamName']
-    away_name = match['team2']['teamName']
+    home_name = flag(match['team1']['teamName'])
+    away_name = flag(match['team2']['teamName'])
     
     final_result = next((r for r in match.get('matchResults', []) if r.get('resultTypeID') == 2), None)
     if not final_result:
@@ -195,7 +214,7 @@ async def main():
                         final_res = next((r for r in results if r.get('resultTypeID') == 2), results[0] if results else {})
                         res = f"{final_res.get('pointsTeam1', '?')} - {final_res.get('pointsTeam2', '?')}"
                         status = "FT" if m.get('matchIsFinished') else "NS"
-                        text += f"• `{m['matchID']}`: {m['team1']['teamName']} {res} {m['team2']['teamName']} ({status})\n"
+                        text += f"• `{m['matchID']}`: {flag(m['team1']['teamName'])} {res} {flag(m['team2']['teamName'])} ({status})\n"
                         if not m.get('matchIsFinished'): all_done = False
                     
                     await callback.message.edit_text(text, parse_mode="Markdown")
@@ -212,7 +231,7 @@ async def main():
                 if matches:
                     text = "📅 *مباريات اليوم:*\n\n"
                     for m in matches:
-                        text += f"ID: `{m['matchID']}` | {m['team1']['teamName']} ضد {m['team2']['teamName']}\n"
+                        text += f"ID: `{m['matchID']}` | {flag(m['team1']['teamName'])} ضد {flag(m['team2']['teamName'])}\n"
                     await message.answer(text, parse_mode="Markdown")
                     return
             await message.answer("لا توجد مباريات اليوم.")
@@ -229,7 +248,7 @@ async def main():
                     for m in matches:
                         results = m.get('matchResults', [])
                         final_res = next((r for r in results if r.get('resultTypeID') == 2), results[0] if results else {})
-                        text += f"{m['team1']['teamName']} {final_res.get('pointsTeam1', '?')} - {final_res.get('pointsTeam2', '?')} {m['team2']['teamName']}\n"
+                        text += f"{flag(m['team1']['teamName'])} {final_res.get('pointsTeam1', '?')} - {final_res.get('pointsTeam2', '?')} {flag(m['team2']['teamName'])}\n"
                     await message.answer(text, parse_mode="Markdown")
                     return
             await message.answer("لم تنتهِ أي مباريات اليوم بعد.")
@@ -249,8 +268,8 @@ async def main():
             if data and isinstance(data, list):
                 match = next((m for m in data if int(m.get('matchID', 0)) == match_id), None)
                 if match:
-                    home = match['team1']['teamName']
-                    away = match['team2']['teamName']
+                    home = flag(match['team1']['teamName'])
+                    away = flag(match['team2']['teamName'])
                     goals = match.get('goals', [])
                     if not goals:
                         results = match.get('matchResults', [])
