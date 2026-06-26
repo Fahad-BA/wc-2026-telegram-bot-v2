@@ -120,6 +120,8 @@ async def monitor_world_cup(bot):
     async with aiohttp.ClientSession() as session:
         while True:
             try:
+                # Default sleep interval is 30 minutes (1800 seconds)
+                sleep_interval = 1800
                 today = datetime.now().strftime('%Y-%m-%d')
                 data = await fetch_api(session, "fixtures", {"league": WC_2026_LEAGUE_ID, "season": 2026, "date": today})
                 
@@ -129,14 +131,22 @@ async def monitor_world_cup(bot):
                         kickoff = datetime.fromisoformat(fixture['fixture']['date'].replace('Z', '+00:00'))
                         now = datetime.now(kickoff.tzinfo)
 
-                        if status == 'NS' and (kickoff - now) < timedelta(minutes=45):
+                        is_live = status in ['1H', 'HT', '2H', 'ET', 'P']
+                        is_soon = status == 'NS' and (kickoff - now) < timedelta(minutes=45)
+
+                        if is_soon:
                             await broadcast_lineups(bot, session, fixture)
-                        if status in ['1H', 'HT', '2H', 'ET', 'P']:
+                            sleep_interval = 60  # Switch to 1 minute polling
+
+                        if is_live:
                             await check_live_events(bot, session, fixture['fixture']['id'])
+                            sleep_interval = 60  # Switch to 1 minute polling
+
                         if status == 'FT':
                             await broadcast_summary(bot, session, fixture)
 
-                await asyncio.sleep(60)
+                logging.info(f"Polling check complete. Sleeping for {sleep_interval // 60} minutes.")
+                await asyncio.sleep(sleep_interval)
             except Exception as e:
                 logging.error(f"Monitor loop error: {e}")
                 await asyncio.sleep(60)
