@@ -2,8 +2,9 @@ import asyncio
 import logging
 import sqlite3
 import aiohttp
+import json
 from aiogram import Bot, Dispatcher, types
-from aiogram.filters import Command
+from aiogram.filters import Command, CommandObject
 from datetime import datetime, timedelta
 
 # --- CONFIGURATION ---
@@ -20,6 +21,11 @@ def init_db():
     cursor.execute('CREATE TABLE IF NOT EXISTS processed_events (event_id TEXT PRIMARY KEY)')
     cursor.execute('CREATE TABLE IF NOT EXISTS processed_lineups (fixture_id INTEGER PRIMARY KEY)')
     cursor.execute('CREATE TABLE IF NOT EXISTS processed_summaries (fixture_id INTEGER PRIMARY KEY)')
+    cursor.execute('''CREATE TABLE IF NOT EXISTS api_cache (
+        endpoint TEXT PRIMARY KEY,
+        data TEXT,
+        updated_at TIMESTAMP
+    )''')
     conn.commit()
     conn.close()
 
@@ -41,15 +47,50 @@ def mark_as_processed(table, identifier):
         pass
     conn.close()
 
+# --- CACHE HELPERS ---
+def get_cached_data(endpoint, ttl_minutes=60):
+    conn = sqlite3.connect('bot.db')
+    cursor = conn.cursor()
+    cursor.execute("SELECT data, updated_at FROM api_cache WHERE endpoint = ?", (endpoint,))
+    row = cursor.fetchone()
+    conn.close()
+
+    if row:
+        data_str, updated_at_str = row
+        updated_at = datetime.fromisoformat(updated_at_str)
+        if datetime.now() - updated_at < timedelta(minutes=ttl_minutes):
+            return json.loads(data_str)
+    return None
+
+def save_cache(endpoint, data):
+    conn = sqlite3.connect('bot.db')
+    cursor = conn.cursor()
+    cursor.execute(
+        "INSERT OR REPLACE INTO api_cache (endpoint, data, updated_at) VALUES (?, ?, ?)",
+        (endpoint, json.dumps(data), datetime.now().isoformat())
+    )
+    conn.commit()
+    conn.close()
+
 # --- API HELPERS ---
-async def fetch_api(session, endpoint, params=None):
+async def fetch_api(session, endpoint, params=None, use_cache=False, ttl_minutes=60):
+    cache_key = f"{endpoint}_{json.dumps(params, sort_keys=True)}" if params else endpoint
+    
+    if use_cache:
+        cached = get_cached_data(cache_key, ttl_minutes)
+        if cached:
+            return cached
+
     headers = {
         'x-rapidapi-key': API_KEY,
         'x-rapidapi-host': 'v3.football.api-sports.io'
     }
     async with session.get(f"{API_BASE_URL}/{endpoint}", headers=headers, params=params) as response:
         if response.status == 200:
-            return await response.json()
+            data = await response.json()
+            if use_cache and data:
+                save_cache(cache_key, data)
+            return data
         return None
 
 # --- NOTIFICATION LOGIC ---
@@ -160,6 +201,91 @@ async def main():
     @dp.message(Command("start"))
     async def start_cmd(message: types.Message):
         await message.answer("World Cup 2026 Bot active! You will now receive match updates.")
+
+    @dp.message(Command("fixtures"))
+    async def cmd_fixtures(message: types.Message):
+        today = datetime.now().strftime('%Y-%m-%d')
+        async with aiohttp.ClientSession() as session:
+            data = await fetch_api(session, "fixtures", {"league": WC_2026_LEAGUE_ID, "season": 2026, "date": today}, use_cache=True, ttl_minutes=60)
+            
+            if data and data.get('response'):
+                text = "📅 *Today's Fixtures:*\n\n"
+                for f in data['response']:
+                    text += f"ID: `{f['fixture']['id']}` | {f['teams']['home']['name']} vs {f['teams']['away']['name']} ({f['fixture']['status']['short']})\n"
+                await message.answer(text, parse_mode="Markdown")
+            else:
+                await message.answer("No fixtures found for today.")
+
+    @dp.message(Command("results"))
+    async def cmd_results(message: types.Message):
+        today = datetime.now().strftime('%Y-%m-%d')
+        async with aiohttp.ClientSession() as session:
+            data = await fetch_api(session, "fixtures", {"league": WC_2026_LEAGUE_ID, "season": 2026, "date": today}, use_cache=True, ttl_minutes=720)
+            
+            if data and data.get('response'):
+                results = [f for f in data['response'] if f['fixture']['status']['short'] == 'FT']
+                if not results:
+                    await message.answer("No completed matches yet today.")
+                    return
+                
+                text = "🏁 *Today's Results:*\n\n"
+                for f in results:
+                    text += f"{f['teams']['home']['name']} {f['goals']['home']} - {f['goals']['away']} {f['teams']['away']['name']}\n"
+                await message.answer(text, parse_mode="Markdown")
+            else:
+                await message.answer("No results found.")
+
+    @dp.message(Command("lineups"))
+    async def cmd_lineups(message: types.Message, command: CommandObject):
+        if not command.args:
+            await message.answer("Usage: `/lineups <fixture_id>`", parse_mode="Markdown")
+            return
+        
+        fixture_id = command.args
+        async with aiohttp.ClientSession() as session:
+            data = await fetch_api(session, "fixtures/lineups", {"fixture": fixture_id}, use_cache=True, ttl_minutes=1440)
+            
+            if data and data.get('response'):
+                text = "🏟 *Lineups*\n\n"
+                for team_data in data['response']:
+                    text += f"*{team_data['team']['name']} ({team_data['formation']})*\n"
+                    players = ", ".join([p['player']['name'] for p in team_data['startXI']])
+                    text += f"XI: {players}\n\n"
+                await message.answer(text, parse_mode="Markdown")
+            else:
+                await message.answer("Lineups not available for this fixture ID.")
+
+    @dp.message(Command("cards"))
+    async def cmd_cards(message: types.Message, command: CommandObject):
+        if not command.args:
+            await message.answer("Usage: `/cards <fixture_id>`", parse_mode="Markdown")
+            return
+        
+        fixture_id = command.args
+        async with aiohttp.ClientSession() as session:
+            # First get fixture status to determine TTL
+            fix_data = await fetch_api(session, "fixtures", {"id": fixture_id}, use_cache=True, ttl_minutes=5)
+            ttl = 1 # 1 minute if live
+            if fix_data and fix_data.get('response'):
+                status = fix_data['response'][0]['fixture']['status']['short']
+                if status == 'FT':
+                    ttl = 720 # 12 hours if finished
+            
+            data = await fetch_api(session, "fixtures/events", {"fixture": fixture_id}, use_cache=True, ttl_minutes=ttl)
+            
+            if data and data.get('response'):
+                cards = [e for e in data['response'] if e['type'] == 'Card']
+                if not cards:
+                    await message.answer("No cards reported for this match.")
+                    return
+                
+                text = "🟨 *Match Cards*\n\n"
+                for event in cards:
+                    emoji = "🟨" if event['detail'] == 'Yellow Card' else "🟥"
+                    text += f"{emoji} {event['time']['elapsed']}' - {event['team']['name']}: {event['player']['name']}\n"
+                await message.answer(text, parse_mode="Markdown")
+            else:
+                await message.answer("No event data available.")
 
     # Run monitor and bot polling together
     await asyncio.gather(dp.start_polling(bot), monitor_world_cup(bot))
