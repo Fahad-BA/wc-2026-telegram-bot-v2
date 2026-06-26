@@ -13,9 +13,9 @@ from datetime import datetime, timedelta
 # --- CONFIGURATION ---
 BOT_TOKEN = "BOT_TOKEN_REMOVED"
 USER_ID = 697241718  # Direct messages to this User ID
-FD_API_KEY = os.getenv("FOOTBALL_DATA_API_KEY", "YOUR_FALLBACK_API_KEY_HERE")
-FD_WC_LEAGUE_CODE = "WC" # World Cup league code for football-data.org
-API_BASE_URL = "https://api.football-data.org/v4"
+OLDB_SHORTCUT = "wm2026"
+OLDB_SEASON = "2026"
+API_BASE_URL = "https://api.openligadb.de"
 TOURNAMENT_START_DATE = datetime(2026, 6, 11)
 
 # --- DATABASE SETUP ---
@@ -86,9 +86,9 @@ def save_cache(endpoint, data):
     conn.close()
 
 # --- API HELPERS ---
-async def fetch_fd(session, endpoint, params=None, use_cache=False, ttl_minutes=60):
+async def fetch_oldb(session, endpoint, params=None, use_cache=False, ttl_minutes=60):
     param_str = json.dumps(params, sort_keys=True) if params else ""
-    cache_key = f"fd_{endpoint}_{param_str}"
+    cache_key = f"oldb_{endpoint}_{param_str}"
     
     if use_cache:
         cached = get_cached_data(cache_key, ttl_minutes)
@@ -96,16 +96,15 @@ async def fetch_fd(session, endpoint, params=None, use_cache=False, ttl_minutes=
             return cached
 
     url = f"{API_BASE_URL}/{endpoint}"
-    headers = { 'X-Auth-Token': FD_API_KEY }
     
-    async with session.get(url, headers=headers, params=params) as response:
+    async with session.get(url, params=params) as response:
         if response.status == 200:
             data = await response.json()
             if use_cache and data:
                 save_cache(cache_key, data)
             return data
         else:
-            logging.error(f"Football-Data API Error {response.status} for {endpoint}")
+            logging.error(f"OpenLigaDB API Error {response.status} for {endpoint}")
             return None
 
 # --- NOTIFICATION LOGIC ---
@@ -116,17 +115,22 @@ async def safe_send(bot, text):
         logging.error(f"Failed to send message to {USER_ID}: {e}")
 
 async def broadcast_summary(bot, session, match):
-    match_id = match['id']
+    match_id = match['matchID']
     if is_processed('processed_summaries', match_id):
         return
 
-    home_name = match['homeTeam']['name']
-    away_name = match['awayTeam']['name']
-    score_data = match['score']['fullTime']
-    score = f"{score_data['home']} - {score_data['away']}"
+    home_name = match['team1']['teamName']
+    away_name = match['team2']['teamName']
+    
+    # OpenLigaDB has matchResults array. Index 1 or specific resultTypeID is usually the final score.
+    final_result = next((r for r in match.get('matchResults', []) if r.get('resultTypeID') == 2), None)
+    if not final_result:
+        final_result = match.get('matchResults', [{}])[0]
+        
+    score = f"{final_result.get('pointsTeam1', 0)} - {final_result.get('pointsTeam2', 0)}"
 
-    text = f"🏁 *Full Time: {home_name} {score} {away_name}*\n\n"
-    text += "Note: Detailed match statistics are restricted on the current API tier."
+    text = f"🏁 *نهاية المباراة: {home_name} {score} {away_name}*\n\n"
+    text += "ملاحظة: تفاصيل الإحصائيات غير متوفرة حالياً عبر هذا المصدر."
 
     await safe_send(bot, text)
     mark_as_processed('processed_summaries', match_id)
@@ -137,15 +141,13 @@ async def monitor_world_cup(bot):
         while True:
             try:
                 sleep_interval = 1800
-                today_str = datetime.now().strftime('%Y-%m-%d')
-                # Football-Data uses competitions/WC/matches?dateFrom=...&dateTo=...
-                data = await fetch_fd(session, f"competitions/{FD_WC_LEAGUE_CODE}/matches", {"dateFrom": today_str, "dateTo": today_str})
+                # OpenLigaDB: Get all matches for the tournament
+                data = await fetch_oldb(session, f"getmatchdata/{OLDB_SHORTCUT}/{OLDB_SEASON}")
                 
-                if data and 'matches' in data:
-                    for m in data['matches']:
-                        status = m['status']
-                        is_live = status in ['IN_PLAY', 'PAUSED']
-                        is_finished = status == 'FINISHED'
+                if data and isinstance(data, list):
+                    now = datetime.now()
+                    for m in data:
+                        is_finished = m.get('matchIsFinished', False)
                         
                         if is_finished:
                             await broadcast_summary(bot, session, m)
@@ -164,7 +166,7 @@ async def main():
 
     @dp.message(Command("start"))
     async def start_cmd(message: types.Message):
-        await message.answer("World Cup 2026 Bot (Football-Data Engine) active! Use /help for commands.")
+        await message.answer("مرحباً! بوت كأس العالم 2026 (محرك OpenLigaDB) نشط حالياً. استخدم /help للمساعدة.")
 
     @dp.message(Command("help"))
     async def help_cmd(message: types.Message):
@@ -174,72 +176,72 @@ async def main():
         while curr <= today:
             d_str = curr.strftime('%Y-%m-%d')
             btn_text = curr.strftime('%b %d')
-            builder.add(InlineKeyboardButton(text=btn_text, callback_data=f"fddate:{d_str}"))
+            builder.add(InlineKeyboardButton(text=btn_text, callback_data=f"oldbdate:{d_str}"))
             curr += timedelta(days=1)
         builder.adjust(4)
-        text = "🏆 *World Cup 2026 Bot Help*\n\n/fixtures - Today\n/results - Today's scores\n/lineups <id>\n/cards <id>\n\nSelect a date:"
+        text = "🏆 *بوت كأس العالم 2026*\n\n/fixtures - مباريات اليوم\n/results - نتائج اليوم\n/lineups <id> - التشكيلة\n/cards <id> - البطاقات\n\nاختر تاريخاً:"
         await message.answer(text, reply_markup=builder.as_markup(), parse_mode="Markdown")
 
-    @dp.callback_query(F.data.startswith("fddate:"))
+    @dp.callback_query(F.data.startswith("oldbdate:"))
     async def handle_date_selection(callback: CallbackQuery):
         date_str = callback.data.split(":")[1]
         async with aiohttp.ClientSession() as session:
-            data = await fetch_fd(session, f"competitions/{FD_WC_LEAGUE_CODE}/matches", {"dateFrom": date_str, "dateTo": date_str}, use_cache=True, ttl_minutes=10)
-            if data and 'matches' in data:
-                text = f"📅 *Matches on {date_str}:*\n\n"
-                all_done = True
-                for m in data['matches']:
-                    res_h = m['score']['fullTime'].get('home', '?')
-                    res_a = m['score']['fullTime'].get('away', '?')
-                    res = f"{res_h} - {res_a}"
-                    status = m['status']
-                    text += f"• `{m['id']}`: {m['homeTeam']['name']} {res} {m['awayTeam']['name']} ({status})\n"
-                    if status != 'FINISHED': all_done = False
-                
-                if all_done: # Infinite cache upgrade
-                    save_cache(f"fd_competitions/{FD_WC_LEAGUE_CODE}/matches_{json.dumps({'dateFrom': date_str, 'dateTo': date_str}, sort_keys=True)}", data)
-                await callback.message.edit_text(text, parse_mode="Markdown")
-                return
-            await callback.answer("No matches found.")
+            # OpenLigaDB doesn't have a direct date filter in the URL, we filter local or use cache
+            data = await fetch_oldb(session, f"getmatchdata/{OLDB_SHORTCUT}/{OLDB_SEASON}", use_cache=True, ttl_minutes=1440)
+            if data and isinstance(data, list):
+                matches = [m for m in data if m['matchDateTimeUTC'].startswith(date_str)]
+                if matches:
+                    text = f"📅 *مباريات يوم {date_str}:*\n\n"
+                    all_done = True
+                    for m in matches:
+                        final_res = next((r for r in m.get('matchResults', []) if r.get('resultTypeID') == 2), m.get('matchResults', [{}])[0])
+                        res = f"{final_res.get('pointsTeam1', '?')} - {final_res.get('pointsTeam2', '?')}"
+                        status = "FT" if m.get('matchIsFinished') else "NS"
+                        text += f"• `{m['matchID']}`: {m['team1']['teamName']} {res} {m['team2']['teamName']} ({status})\n"
+                        if not m.get('matchIsFinished'): all_done = False
+                    
+                    await callback.message.edit_text(text, parse_mode="Markdown")
+                    return
+            await callback.answer("لا توجد مباريات لهذا اليوم.")
 
     @dp.message(Command("fixtures"))
     async def cmd_fixtures(message: types.Message):
         today = datetime.now().strftime('%Y-%m-%d')
         async with aiohttp.ClientSession() as session:
-            data = await fetch_fd(session, f"competitions/{FD_WC_LEAGUE_CODE}/matches", {"dateFrom": today, "dateTo": today}, use_cache=True, ttl_minutes=30)
-            if data and 'matches' in data:
-                text = "📅 *Today's Fixtures:*\n\n"
-                for m in data['matches']:
-                    text += f"ID: `{m['id']}` | {m['homeTeam']['name']} vs {m['awayTeam']['name']} ({m['status']})\n"
-                await message.answer(text, parse_mode="Markdown")
-                return
-            await message.answer("No fixtures today.")
+            data = await fetch_oldb(session, f"getmatchdata/{OLDB_SHORTCUT}/{OLDB_SEASON}", use_cache=True, ttl_minutes=30)
+            if data and isinstance(data, list):
+                matches = [m for m in data if m['matchDateTimeUTC'].startswith(today)]
+                if matches:
+                    text = "📅 *مباريات اليوم:*\n\n"
+                    for m in matches:
+                        text += f"ID: `{m['matchID']}` | {m['team1']['teamName']} ضد {m['team2']['teamName']}\n"
+                    await message.answer(text, parse_mode="Markdown")
+                    return
+            await message.answer("لا توجد مباريات اليوم.")
 
     @dp.message(Command("results"))
     async def cmd_results(message: types.Message):
         today = datetime.now().strftime('%Y-%m-%d')
         async with aiohttp.ClientSession() as session:
-            data = await fetch_fd(session, f"competitions/{FD_WC_LEAGUE_CODE}/matches", {"dateFrom": today, "dateTo": today}, use_cache=True, ttl_minutes=30)
-            if data and 'matches' in data:
-                text = "🏁 *Today's Results:*\n\n"
-                found = False
-                for m in data['matches']:
-                    if m['status'] == 'FINISHED':
-                        found = True
-                        score = m['score']['fullTime']
-                        text += f"{m['homeTeam']['name']} {score['home']} - {score['away']} {m['awayTeam']['name']}\n"
-                if found:
+            data = await fetch_oldb(session, f"getmatchdata/{OLDB_SHORTCUT}/{OLDB_SEASON}", use_cache=True, ttl_minutes=30)
+            if data and isinstance(data, list):
+                matches = [m for m in data if m['matchDateTimeUTC'].startswith(today) and m.get('matchIsFinished')]
+                if matches:
+                    text = "🏁 *نتائج اليوم:*\n\n"
+                    for m in matches:
+                        final_res = next((r for r in m.get('matchResults', []) if r.get('resultTypeID') == 2), m.get('matchResults', [{}])[0])
+                        text += f"{m['team1']['teamName']} {final_res.get('pointsTeam1')} - {final_res.get('pointsTeam2')} {m['team2']['teamName']}\n"
                     await message.answer(text, parse_mode="Markdown")
                     return
-            await message.answer("No completed matches yet.")
+            await message.answer("لم تنتهِ أي مباريات اليوم بعد.")
 
     @dp.message(Command("lineups"))
     async def cmd_lineups(message: types.Message, command: CommandObject):
-        await message.answer("🏟 *Lineups*\n\nLineup data is currently limited on the Free tier of the Football-Data API.", parse_mode="Markdown")
+        await message.answer("🏟 *التشكيلة*\n\nعذراً، بيانات التشكيلة غير متوفرة حالياً عبر محرك OpenLigaDB المجاني.", parse_mode="Markdown")
 
     @dp.message(Command("cards"))
     async def cmd_cards(message: types.Message, command: CommandObject):
-        await message.answer("🟨 *Match Cards*\n\nDetailed card and event data is currently limited on the Free tier of the Football-Data API.", parse_mode="Markdown")
+        await message.answer("🟨 *البطاقات*\n\nعذراً، تفاصيل البطاقات والأحداث غير متوفرة حالياً عبر محرك OpenLigaDB المجاني.", parse_mode="Markdown")
 
     await asyncio.gather(dp.start_polling(bot), monitor_world_cup(bot))
 
