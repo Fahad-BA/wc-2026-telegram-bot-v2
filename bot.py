@@ -8,7 +8,33 @@ from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command, CommandObject
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
 from aiogram.utils.keyboard import InlineKeyboardBuilder
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
+
+# --- FLAG MAPPING ---
+FLAG_MAP = {
+    'Algerien': '🇩🇿', 'Argentinien': '🇦🇷', 'Australien': '🇦🇺', 'Belgien': '🇧🇪',
+    'Bosnien-Herzegowina': '🇧🇦', 'Brasilien': '🇧🇷', 'Curaçao': '🇨🇼', 'DR Kongo': '🇨🇩',
+    'Deutschland': '🇩🇪', 'Ecuador': '🇪🇨', 'Elfenbeinküste': '🇨🇮', 'England': '🏴󠁧󠁢󠁥󠁮󠁧󠁿',
+    'Frankreich': '🇫🇷', 'Ghana': '🇬🇭', 'Haiti': '🇭🇹', 'Irak': '🇮🇶', 'Iran': '🇮🇷',
+    'Japan': '🇯🇵', 'Jordanien': '🇯🇴', 'Kanada': '🇨🇦', 'Kap Verde': '🇨🇻',
+    'Katar': '🇶🇦', 'Kolumbien': '🇨🇴', 'Kroatien': '🇭🇷', 'Marokko': '🇲🇦',
+    'Mexiko': '🇲🇽', 'Neuseeland': '🇳🇿', 'Niederlande': '🇳🇱', 'Norwegen': '🇳🇴',
+    'Panama': '🇵🇦', 'Paraguay': '🇵🇾', 'Portugal': '🇵🇹', 'Saudi-Arabien': '🇸🇦',
+    'Schottland': '🏴󠁧󠁢󠁳󠁣󠁴󠁿', 'Schweden': '🇸🇪', 'Schweiz': '🇨🇭', 'Senegal': '🇸🇳',
+    'Spanien': '🇪🇸', 'Südafrika': '🇿🇦', 'Südkorea': '🇰🇷', 'Tschechien': '🇨🇿',
+    'Tunesien': '🇹🇳', 'Türkei': '🇹🇷', 'USA': '🇺🇸', 'Uruguay': '🇺🇾',
+    'Usbekistan': '🇺🇿', 'Ägypten': '🇪🇬', 'Österreich': '🇦🇹',
+    # Added English mappings for API-Football compatibility
+    'Algeria': '🇩🇿', 'Argentina': '🇦🇷', 'Australia': '🇦🇺', 'Belgium': '🇧🇪',
+    'Brazil': '🇧🇷', 'Canada': '🇨🇦', 'Colombia': '🇨🇴', 'Croatia': '🇭🇷',
+    'Egypt': '🇪🇬', 'France': '🇫🇷', 'Germany': '🇩🇪', 'Japan': '🇯🇵',
+    'Mexico': '🇲🇽', 'Morocco': '🇲🇦', 'Netherlands': '🇳🇱', 'Norway': '🇳🇴',
+    'Portugal': '🇵🇹', 'Saudi Arabia': '🇸🇦', 'Spain': '🇪🇸', 'Switzerland': '🇨🇭',
+    'Tunisia': '🇹🇳', 'Uruguay': '🇺🇾', 'USA': '🇺🇸', 'Korea Republic': '🇰🇷'
+}
+
+def flag(name):
+    return FLAG_MAP.get(name, name)
 
 # --- CONFIGURATION ---
 BOT_TOKEN = "8876705370:AAEGmWOMaTjOflAy7myAWMouVoBn8_kHais"
@@ -17,6 +43,17 @@ USER_ID = 697241718  # Direct messages to this User ID
 WC_2026_LEAGUE_ID = 1  # League ID for World Cup 2026
 API_BASE_URL = "https://v3.football.api-sports.io"
 TOURNAMENT_START_DATE = datetime(2026, 6, 11)
+RIYADH_TZ = timezone(timedelta(hours=3))
+
+def riyadh_time(utc_str):
+    """Convert UTC datetime string to Riyadh time string."""
+    if not utc_str:
+        return '—'
+    try:
+        dt = datetime.fromisoformat(utc_str.replace('Z', '+00:00'))
+        return dt.astimezone(RIYADH_TZ).strftime('%H:%M')
+    except:
+        return '—'
 
 # --- DATABASE SETUP ---
 def init_db():
@@ -63,14 +100,12 @@ def get_cached_data(endpoint, ttl_minutes=60):
         data_str, updated_at_str = row
         try:
             parsed = json.loads(data_str)
-            # Ensure we don't return an empty response as valid cache
             if not parsed or not parsed.get('response') or len(parsed['response']) == 0:
                  return None
         except:
             return None
 
         updated_at = datetime.fromisoformat(updated_at_str)
-        # Use a very large TTL for "infinite" caching (-1)
         if ttl_minutes == -1 or (datetime.now() - updated_at < timedelta(minutes=ttl_minutes)):
             return parsed
     return None
@@ -78,7 +113,6 @@ def get_cached_data(endpoint, ttl_minutes=60):
 def save_cache(endpoint, data):
     if not data or not data.get('response') or len(data['response']) == 0:
         return
-
     conn = sqlite3.connect('bot.db')
     cursor = conn.cursor()
     cursor.execute(
@@ -117,7 +151,7 @@ async def safe_send(bot, text):
     try:
         await bot.send_message(USER_ID, text, parse_mode="Markdown")
     except Exception as e:
-        logging.error(f"Failed to send message to {USER_ID}: {e}. Make sure the user has /start-ed the bot.")
+        logging.error(f"Failed to send message to {USER_ID}: {e}")
 
 async def broadcast_lineups(bot, session, fixture):
     fixture_id = fixture['fixture']['id']
@@ -128,9 +162,11 @@ async def broadcast_lineups(bot, session, fixture):
     if not data or not data.get('response'):
         return
 
-    text = f"🏟 *Lineups: {fixture['teams']['home']['name']} vs {fixture['teams']['away']['name']}*\n\n"
+    home_name = flag(fixture['teams']['home']['name'])
+    away_name = flag(fixture['teams']['away']['name'])
+    text = f"🏟 *التشكيلة: {home_name} ضد {away_name}*\n\n"
     for team_data in data['response']:
-        text += f"*{team_data['team']['name']} ({team_data['formation']})*\n"
+        text += f"*{flag(team_data['team']['name'])} ({team_data['formation']})*\n"
         players = ", ".join([p['player']['name'] for p in team_data['startXI']])
         text += f"XI: {players}\n\n"
 
@@ -143,7 +179,6 @@ async def check_live_events(bot, session, fixture_id):
         return
 
     for event in data['response']:
-        # Ensure event player ID exists
         p_id = event['player'].get('id', '0')
         unique_id = f"{fixture_id}_{event['time']['elapsed']}_{event['type']}_{event['detail']}_{p_id}"
         if is_processed('processed_events', unique_id):
@@ -151,7 +186,7 @@ async def check_live_events(bot, session, fixture_id):
 
         emoji = "⚽" if event['type'] == 'Goal' else "🟨" if event['detail'] == 'Yellow Card' else "🟥" if event['detail'] == 'Red Card' else "🔄"
         msg = f"{emoji} *{event['type']} ({event['time']['elapsed']}')*\n"
-        msg += f"{event['team']['name']}: {event['player']['name']}"
+        msg += f"{flag(event['team']['name'])}: {event['player']['name']}"
         if event['assist'].get('name'):
             msg += f" (Assist: {event['assist']['name']})"
         
@@ -167,12 +202,14 @@ async def broadcast_summary(bot, session, fixture):
     if not stats_data or not stats_data.get('response'):
         return
 
-    text = f"🏁 *Full Time: {fixture['teams']['home']['name']} {fixture['goals']['home']} - {fixture['goals']['away']} {fixture['teams']['away']['name']}*\n\n"
-    text += "*Match Statistics:*\n"
+    home_name = flag(fixture['teams']['home']['name'])
+    away_name = flag(fixture['teams']['away']['name'])
+    text = f"🏁 *نهاية المباراة: {home_name} {fixture['goals']['home']} - {fixture['goals']['away']} {away_name}*\n\n"
+    text += "*إحصائيات المباراة:*\n"
     for team_stat in stats_data['response']:
-        t_name = team_stat['team']['name']
+        t_name = flag(team_stat['team']['name'])
         stats = {s['type']: s['value'] for s in team_stat['statistics']}
-        text += f"_{t_name}_: Shots: {stats.get('Total Shots')}, Possession: {stats.get('Ball Possession')}, Corners: {stats.get('Corner Kicks')}\n"
+        text += f"_{t_name}_: التسديدات: {stats.get('Total Shots')}, الاستحواذ: {stats.get('Ball Possession')}, الركنيات: {stats.get('Corner Kicks')}\n"
 
     await safe_send(bot, text)
     mark_as_processed('processed_summaries', fixture_id)
@@ -189,7 +226,6 @@ async def monitor_world_cup(bot):
                 if data and data.get('response'):
                     for fixture in data['response']:
                         status = fixture['fixture']['status']['short']
-                        # Safe date parsing
                         date_str = fixture['fixture']['date'].replace('Z', '+00:00')
                         kickoff = datetime.fromisoformat(date_str)
                         now = datetime.now(kickoff.tzinfo)
@@ -222,7 +258,7 @@ async def main():
 
     @dp.message(Command("start"))
     async def start_cmd(message: types.Message):
-        await message.answer("World Cup 2026 Bot active! Use /help to see all commands and match history.")
+        await message.answer("مرحباً! بوت كأس العالم 2026 نشط حالياً. استخدم /help للمساعدة.")
 
     @dp.message(Command("help"))
     async def help_cmd(message: types.Message):
@@ -237,15 +273,7 @@ async def main():
             current_date += timedelta(days=1)
         
         builder.adjust(4)
-        text = (
-            "🏆 *World Cup 2026 Bot Help*\n\n"
-            "Commands:\n"
-            "/fixtures - Today's matches\n"
-            "/results - Today's final scores\n"
-            "/lineups <fixture_id> - Get XI\n"
-            "/cards <fixture_id> - Get cards\n\n"
-            "Select a date below to view match history:"
-        )
+        text = "🏆 *بوت كأس العالم 2026*\n\n/fixtures - مباريات اليوم\n/results - نتائج اليوم\n/goals <id> - أهداف المباراة\n/lineups <id> - التشكيلة\n/cards <id> - البطاقات\n\nاختر تاريخاً لعرض النتائج السابقة:"
         await message.answer(text, reply_markup=builder.as_markup(), parse_mode="Markdown")
 
     @dp.callback_query(F.data.startswith("date:"))
@@ -254,10 +282,7 @@ async def main():
         params = {"league": WC_2026_LEAGUE_ID, "season": 2026, "date": selected_date_str}
         
         async with aiohttp.ClientSession() as session:
-            # 1. First, strictly check the cache for an "infinite" or "fresh" record
             data = get_cached_data(f"fixtures_{json.dumps(params, sort_keys=True)}", ttl_minutes=-1)
-            
-            # 2. If cache miss, hit the API
             if not data:
                 data = await fetch_api(session, "fixtures", params, use_cache=True, ttl_minutes=10)
             
@@ -268,29 +293,29 @@ async def main():
                         all_finished = False
                         break
                 
-                # 3. If all matches are finished, upgrade to "infinite" in cache
                 if all_finished:
                     save_cache(f"fixtures_{json.dumps(params, sort_keys=True)}", data)
 
-                text = f"📅 *Matches on {selected_date_str}:*\n\n"
+                text = f"📅 *مباريات يوم {selected_date_str}:*\n\n"
                 for f in data['response']:
-                    home = f['teams']['home']['name']
-                    away = f['teams']['away']['name']
+                    home = flag(f['teams']['home']['name'])
+                    away = flag(f['teams']['away']['name'])
                     status = f['fixture']['status']['short']
                     f_id = f['fixture']['id']
+                    kickoff = riyadh_time(f['fixture']['date'])
                     
                     if status in ['FT', 'AET', 'PEN']:
                         score = f"{f['goals']['home']} - {f['goals']['away']}"
                         text += f"• `{f_id}`: {home} {score} {away} ({status})\n"
                     else:
-                        text += f"• `{f_id}`: {home} vs {away} ({status})\n"
+                        text += f"• `{f_id}`: {home} vs {away} ({kickoff})\n"
                 
                 try:
                     await callback.message.edit_text(text, parse_mode="Markdown")
                 except Exception:
                     await callback.message.answer(text, parse_mode="Markdown")
             else:
-                await callback.answer(f"No match data found for {selected_date_str}.", show_alert=True)
+                await callback.answer(f"لا توجد مباريات لهذا اليوم.", show_alert=True)
 
     @dp.message(Command("fixtures"))
     async def cmd_fixtures(message: types.Message):
@@ -299,12 +324,13 @@ async def main():
             data = await fetch_api(session, "fixtures", {"league": WC_2026_LEAGUE_ID, "season": 2026, "date": today}, use_cache=True, ttl_minutes=60)
             
             if data and data.get('response'):
-                text = "📅 *Today's Fixtures:*\n\n"
+                text = "📅 *مباريات اليوم:*\n\n"
                 for f in data['response']:
-                    text += f"ID: `{f['fixture']['id']}` | {f['teams']['home']['name']} vs {f['teams']['away']['name']} ({f['fixture']['status']['short']})\n"
+                    kickoff = riyadh_time(f['fixture']['date'])
+                    text += f"ID: `{f['fixture']['id']}` | {kickoff} | {flag(f['teams']['home']['name'])} ضد {flag(f['teams']['away']['name'])} ({f['fixture']['status']['short']})\n"
                 await message.answer(text, parse_mode="Markdown")
             else:
-                await message.answer("No fixtures found for today.")
+                await message.answer("لا توجد مباريات اليوم.")
 
     @dp.message(Command("results"))
     async def cmd_results(message: types.Message):
@@ -315,15 +341,32 @@ async def main():
             if data and data.get('response'):
                 results = [f for f in data['response'] if f['fixture']['status']['short'] in ['FT', 'AET', 'PEN']]
                 if not results:
-                    await message.answer("No completed matches yet today.")
+                    await message.answer("لم تنتهِ أي مباريات اليوم بعد.")
                     return
                 
-                text = "🏁 *Today's Results:*\n\n"
+                text = "🏁 *نتائج اليوم:*\n\n"
                 for f in results:
-                    text += f"{f['teams']['home']['name']} {f['goals']['home']} - {f['goals']['away']} {f['teams']['away']['name']}\n"
+                    text += f"{flag(f['teams']['home']['name'])} {f['goals']['home']} - {f['goals']['away']} {flag(f['teams']['away']['name'])}\n"
                 await message.answer(text, parse_mode="Markdown")
             else:
-                await message.answer("No results found.")
+                await message.answer("لا توجد نتائج اليوم.")
+
+    @dp.message(Command("goals"))
+    async def cmd_goals(message: types.Message, command: CommandObject):
+        if not command.args:
+            await message.answer("Usage: `/goals <fixture_id>`", parse_mode="Markdown")
+            return
+        
+        fixture_id = command.args
+        async with aiohttp.ClientSession() as session:
+            data = await fetch_api(session, "fixtures/events", {"fixture": fixture_id, "type": "Goal"}, use_cache=True, ttl_minutes=5)
+            if data and data.get('response'):
+                text = "⚽ *أهداف المباراة*\n\n"
+                for event in data['response']:
+                    text += f"• {event['time']['elapsed']}' - {flag(event['team']['name'])}: {event['player']['name']}\n"
+                await message.answer(text, parse_mode="Markdown")
+            else:
+                await message.answer("لا توجد أهداف مسجلة لهذه المباراة.")
 
     @dp.message(Command("lineups"))
     async def cmd_lineups(message: types.Message, command: CommandObject):
@@ -336,14 +379,14 @@ async def main():
             data = await fetch_api(session, "fixtures/lineups", {"fixture": fixture_id}, use_cache=True, ttl_minutes=1440)
             
             if data and data.get('response'):
-                text = "🏟 *Lineups*\n\n"
+                text = "🏟 *التشكيلة*\n\n"
                 for team_data in data['response']:
-                    text += f"*{team_data['team']['name']} ({team_data['formation']})*\n"
+                    text += f"*{flag(team_data['team']['name'])} ({team_data['formation']})*\n"
                     players = ", ".join([p['player']['name'] for p in team_data['startXI']])
                     text += f"XI: {players}\n\n"
                 await message.answer(text, parse_mode="Markdown")
             else:
-                await message.answer("Lineups not available for this fixture ID.")
+                await message.answer("التشكيلة غير متوفرة لهذا الرقم.")
 
     @dp.message(Command("cards"))
     async def cmd_cards(message: types.Message, command: CommandObject):
@@ -353,28 +396,20 @@ async def main():
         
         fixture_id = command.args
         async with aiohttp.ClientSession() as session:
-            fix_data = await fetch_api(session, "fixtures", {"id": fixture_id}, use_cache=True, ttl_minutes=5)
-            ttl = 1
-            if fix_data and fix_data.get('response'):
-                status = fix_data['response'][0]['fixture']['status']['short']
-                if status in ['FT', 'AET', 'PEN']:
-                    ttl = 720
-            
-            data = await fetch_api(session, "fixtures/events", {"fixture": fixture_id}, use_cache=True, ttl_minutes=ttl)
-            
+            data = await fetch_api(session, "fixtures/events", {"fixture": fixture_id}, use_cache=True, ttl_minutes=5)
             if data and data.get('response'):
                 cards = [e for e in data['response'] if e['type'] == 'Card']
                 if not cards:
-                    await message.answer("No cards reported for this match.")
+                    await message.answer("لا توجد بطاقات مسجلة لهذه المباراة.")
                     return
                 
-                text = "🟨 *Match Cards*\n\n"
+                text = "🟨 *البطاقات*\n\n"
                 for event in cards:
                     emoji = "🟨" if event['detail'] == 'Yellow Card' else "🟥"
-                    text += f"{emoji} {event['time']['elapsed']}' - {event['team']['name']}: {event['player']['name']}\n"
+                    text += f"{emoji} {event['time']['elapsed']}' - {flag(event['team']['name'])}: {event['player']['name']}\n"
                 await message.answer(text, parse_mode="Markdown")
             else:
-                await message.answer("No event data available.")
+                await message.answer("لا توجد بيانات متاحة لهذه المباراة.")
 
     await asyncio.gather(dp.start_polling(bot), monitor_world_cup(bot))
 
