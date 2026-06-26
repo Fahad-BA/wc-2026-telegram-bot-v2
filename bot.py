@@ -137,6 +137,30 @@ async def fetch_oldb(session, endpoint, params=None, use_cache=False, ttl_minute
             logging.error(f"OpenLigaDB API Error {response.status} for {endpoint}")
             return None
 
+def get_smart_ttl(data, requested_date_str=None):
+    """
+    Calculate TTL for tournament data.
+    If requested_date_str is today, or contains unfinished matches, return 5 minutes.
+    Otherwise return 1440 minutes (24h).
+    """
+    if not data or not isinstance(data, list):
+        return 5
+    
+    today_str = datetime.now().strftime('%Y-%m-%d')
+    
+    # If this fetch includes today's matches, always use short TTL
+    has_today = any((m.get('matchDateTimeUTC') or m.get('matchDateTime') or '').startswith(today_str) for m in data)
+    if has_today:
+        return 5
+        
+    # If filtering for a specific date, and that date has unfinished matches, use short TTL
+    if requested_date_str:
+        matches = [m for m in data if (m.get('matchDateTimeUTC') or m.get('matchDateTime') or '').startswith(requested_date_str)]
+        if matches and not all(m.get('matchIsFinished') for m in matches):
+            return 5
+            
+    return 1440
+
 # --- NOTIFICATION LOGIC ---
 async def safe_send(bot, text):
     try:
@@ -170,7 +194,8 @@ async def monitor_world_cup(bot):
         while True:
             try:
                 sleep_interval = 1800
-                data = await fetch_oldb(session, f"getmatchdata/{OLDB_SHORTCUT}/{OLDB_SEASON}")
+                # Use a very short TTL for live monitoring
+                data = await fetch_oldb(session, f"getmatchdata/{OLDB_SHORTCUT}/{OLDB_SEASON}", use_cache=True, ttl_minutes=1)
                 
                 if data and isinstance(data, list):
                     for m in data:
@@ -212,14 +237,19 @@ async def main():
     async def handle_date_selection(callback: CallbackQuery):
         date_str = callback.data.split(":")[1]
         async with aiohttp.ClientSession() as session:
-            # We use a longer TTL for full tournament data in local filtering
+            # First, check for any cache (even a 24h one)
             data = await fetch_oldb(session, f"getmatchdata/{OLDB_SHORTCUT}/{OLDB_SEASON}", use_cache=True, ttl_minutes=1440)
+            
+            # Recalculate smart TTL based on current state
+            ttl = get_smart_ttl(data, date_str)
+            if ttl == 5:
+                # If we need fresh data, re-fetch with short TTL
+                data = await fetch_oldb(session, f"getmatchdata/{OLDB_SHORTCUT}/{OLDB_SEASON}", use_cache=True, ttl_minutes=5)
+
             if data and isinstance(data, list):
-                # Ensure we handle null matchDateTimeUTC or matchDateTime gracefully
                 matches = [m for m in data if (m.get('matchDateTimeUTC') or m.get('matchDateTime') or '').startswith(date_str)]
                 if matches:
                     text = f"📅 *مباريات يوم {date_str}:*\n\n"
-                    all_done = True
                     for m in matches:
                         results = m.get('matchResults', [])
                         final_res = next((r for r in results if r.get('resultTypeID') == 2), results[0] if results else {})
@@ -227,7 +257,6 @@ async def main():
                         kickoff = riyadh_time(m.get('matchDateTimeUTC') or m.get('matchDateTime'))
                         status = "FT" if m.get('matchIsFinished') else kickoff
                         text += f"• `{m['matchID']}`: 🏠 {flag(m['team1']['teamName'])} {res} {flag(m['team2']['teamName'])} 🏃 ({status})\n"
-                        if not m.get('matchIsFinished'): all_done = False
                     
                     try:
                         await callback.message.edit_text(text, parse_mode="Markdown")
@@ -240,7 +269,8 @@ async def main():
     async def cmd_fixtures(message: types.Message):
         today = datetime.now().strftime('%Y-%m-%d')
         async with aiohttp.ClientSession() as session:
-            data = await fetch_oldb(session, f"getmatchdata/{OLDB_SHORTCUT}/{OLDB_SEASON}", use_cache=True, ttl_minutes=30)
+            # Fixtures are by definition upcoming/live, use short TTL
+            data = await fetch_oldb(session, f"getmatchdata/{OLDB_SHORTCUT}/{OLDB_SEASON}", use_cache=True, ttl_minutes=5)
             if data and isinstance(data, list):
                 matches = [m for m in data if (m.get('matchDateTimeUTC') or m.get('matchDateTime') or '').startswith(today)]
                 if matches:
@@ -256,7 +286,8 @@ async def main():
     async def cmd_results(message: types.Message):
         today = datetime.now().strftime('%Y-%m-%d')
         async with aiohttp.ClientSession() as session:
-            data = await fetch_oldb(session, f"getmatchdata/{OLDB_SHORTCUT}/{OLDB_SEASON}", use_cache=True, ttl_minutes=30)
+            # Results change as matches finish, use short TTL
+            data = await fetch_oldb(session, f"getmatchdata/{OLDB_SHORTCUT}/{OLDB_SEASON}", use_cache=True, ttl_minutes=5)
             if data and isinstance(data, list):
                 matches = [m for m in data if (m.get('matchDateTimeUTC') or m.get('matchDateTime') or '').startswith(today) and m.get('matchIsFinished')]
                 if matches:
@@ -280,7 +311,8 @@ async def main():
             await message.answer("⚠️ الـ ID يجب أن يكون رقماً. مثال: `/goals 66123`", parse_mode="Markdown")
             return
         async with aiohttp.ClientSession() as session:
-            data = await fetch_oldb(session, f"getmatchdata/{OLDB_SHORTCUT}/{OLDB_SEASON}", use_cache=True, ttl_minutes=60)
+            # Use short TTL for goals as they update during live games
+            data = await fetch_oldb(session, f"getmatchdata/{OLDB_SHORTCUT}/{OLDB_SEASON}", use_cache=True, ttl_minutes=5)
             if data and isinstance(data, list):
                 match = next((m for m in data if int(m.get('matchID', 0)) == match_id), None)
                 if match:
@@ -294,8 +326,6 @@ async def main():
                         await message.answer(f"⚽ *{home} {score} {away}*\n\nلا توجد تفاصيل أهداف متاحة.", parse_mode="Markdown")
                         return
                     kickoff = riyadh_time(match.get('matchDateTimeUTC') or match.get('matchDateTime'))
-                    t1_id = match['team1'].get('teamId')
-                    t2_id = match['team2'].get('teamId')
                     text = f"⚽ *{home} ضد {away}* ({kickoff} توقيت الرياض)\n\n"
                     has_details = any(g.get('goalGetterName') for g in goals)
                     if has_details:
