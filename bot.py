@@ -234,6 +234,43 @@ async def main():
                     return
             await message.answer("لم تنتهِ أي مباريات اليوم بعد.")
 
+    @dp.message(Command("goals"))
+    async def cmd_goals(message: types.Message, command: CommandObject):
+        if not command.args:
+            await message.answer("استخدام: `/goals <match_id>`\n\nاكتب /fixtures لعرض مباريات اليوم وأرقامها.", parse_mode="Markdown")
+            return
+        try:
+            match_id = int(command.args.strip())
+        except ValueError:
+            await message.answer("⚠️ الـ ID يجب أن يكون رقماً. مثال: `/goals 66123`", parse_mode="Markdown")
+            return
+        async with aiohttp.ClientSession() as session:
+            data = await fetch_oldb(session, f"getmatchdata/{OLDB_SHORTCUT}/{OLDB_SEASON}", use_cache=True, ttl_minutes=60)
+            if data and isinstance(data, list):
+                match = next((m for m in data if int(m.get('matchID', 0)) == match_id), None)
+                if match:
+                    home = match['team1']['teamName']
+                    away = match['team2']['teamName']
+                    goals = match.get('goals', [])
+                    if not goals:
+                        results = match.get('matchResults', [])
+                        final_res = next((r for r in results if r.get('resultTypeID') == 2), results[0] if results else {})
+                        score = f"{final_res.get('pointsTeam1', 0)} - {final_res.get('pointsTeam2', 0)}"
+                        await message.answer(f"⚽ *{home} {score} {away}*\n\nلا توجد تفاصيل أهداف متاحة.", parse_mode="Markdown")
+                        return
+                    text = f"⚽ *أهداف: {home} ضد {away}*\n\n"
+                    for g in goals:
+                        scorer = g.get('goalGetterName', 'غير معروف')
+                        minute = g.get('goalMatchMinute', '??')
+                        team = g.get('teamID')
+                        penalty = " (ركلة جزاء)" if g.get('isPenalty', False) else ""
+                        own = " (هدف عكسي)" if g.get('isOwnGoal', False) else ""
+                        side = "🏠" if team == match['team1'].get('teamID') else "🏃" if team == match['team2'].get('teamID') else ""
+                        text += f"{side} {scorer} ({minute}'){penalty}{own}\n"
+                    await message.answer(text, parse_mode="Markdown")
+                    return
+            await message.answer("⚠️ لم يتم العثور على مباراة بهذا الرقم.\nاستخدم /fixtures لعرض المباريات المتاحة.", parse_mode="Markdown")
+
     @dp.message(Command("lineups"))
     async def cmd_lineups(message: types.Message, command: CommandObject):
         await message.answer("🏟 *التشكيلة*\n\nعذراً، بيانات التشكيلة غير متوفرة حالياً عبر محرك OpenLigaDB المجاني.", parse_mode="Markdown")
