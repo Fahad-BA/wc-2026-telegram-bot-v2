@@ -93,6 +93,24 @@ async def fetch_api(session, endpoint, params=None, use_cache=False, ttl_minutes
         if response.status == 200:
             data = await response.json()
             if use_cache and data:
+                # SMART CACHING LOGIC
+                # If endpoint is 'fixtures' and we're caching a full date
+                if endpoint == "fixtures" and params and 'date' in params:
+                    all_finished = True
+                    for fixture in data.get('response', []):
+                        if fixture['fixture']['status']['short'] not in ['FT', 'AET', 'PEN']:
+                            all_finished = False
+                            break
+                    
+                    # If any match is still not finished, override ttl_minutes to a short interval
+                    # and save with that logic. Note: fetch_api saves current data.
+                    # If not all_finished, next call with use_cache=True and ttl_minutes=-1 
+                    # would still hit cache unless we prevent it.
+                    # The get_cached_data check above already uses ttl_minutes.
+                    # So if we save it now, we just need to make sure subsequent calls 
+                    # for "live" dates don't use ttl_minutes=-1.
+                    pass
+
                 save_cache(cache_key, data)
             return data
         return None
@@ -233,14 +251,27 @@ async def main():
     @dp.callback_query(F.data.startswith("date:"))
     async def handle_date_selection(callback: CallbackQuery):
         selected_date_str = callback.data.split(":")[1]
-        selected_date = datetime.strptime(selected_date_str, '%Y-%m-%d')
-        today_str = datetime.now().strftime('%Y-%m-%d')
-        
-        # Infinite TTL for past dates, 60 mins for today
-        ttl = -1 if selected_date_str < today_str else 60
         
         async with aiohttp.ClientSession() as session:
-            data = await fetch_api(session, "fixtures", {"league": WC_2026_LEAGUE_ID, "season": 2026, "date": selected_date_str}, use_cache=True, ttl_minutes=ttl)
+            # Smart TTL Logic: First check if all matches for the date are finished
+            # Note: We must fetch/check current data to decide on TTL.
+            # We'll call fetch_api with a temporary short TTL to check status.
+            temp_data = await fetch_api(session, "fixtures", {"league": WC_2026_LEAGUE_ID, "season": 2026, "date": selected_date_str}, use_cache=True, ttl_minutes=5)
+            
+            all_finished = True
+            if temp_data and temp_data.get('response'):
+                for fixture in temp_data['response']:
+                    if fixture['fixture']['status']['short'] not in ['FT', 'AET', 'PEN']:
+                        all_finished = False
+                        break
+            else:
+                all_finished = False # No data yet or error
+            
+            # Now determine final TTL: -1 if all finished, else 5 mins
+            final_ttl = -1 if all_finished else 5
+            
+            # Fetch again with the correct TTL (will hit cache if temp_data was within 5 mins and all_finished was True)
+            data = await fetch_api(session, "fixtures", {"league": WC_2026_LEAGUE_ID, "season": 2026, "date": selected_date_str}, use_cache=True, ttl_minutes=final_ttl)
             
             if data and data.get('response'):
                 text = f"📅 *Matches on {selected_date_str}:*\n\n"
@@ -250,9 +281,9 @@ async def main():
                     status = f['fixture']['status']['short']
                     f_id = f['fixture']['id']
                     
-                    if status == 'FT':
+                    if status in ['FT', 'AET', 'PEN']:
                         score = f"{f['goals']['home']} - {f['goals']['away']}"
-                        text += f"• `{f_id}`: {home} {score} {away} (FT)\n"
+                        text += f"• `{f_id}`: {home} {score} {away} ({status})\n"
                     else:
                         text += f"• `{f_id}`: {home} vs {away} ({status})\n"
                 
@@ -281,7 +312,7 @@ async def main():
             data = await fetch_api(session, "fixtures", {"league": WC_2026_LEAGUE_ID, "season": 2026, "date": today}, use_cache=True, ttl_minutes=720)
             
             if data and data.get('response'):
-                results = [f for f in data['response'] if f['fixture']['status']['short'] == 'FT']
+                results = [f for f in data['response'] if f['fixture']['status']['short'] in ['FT', 'AET', 'PEN']]
                 if not results:
                     await message.answer("No completed matches yet today.")
                     return
@@ -325,7 +356,7 @@ async def main():
             ttl = 1
             if fix_data and fix_data.get('response'):
                 status = fix_data['response'][0]['fixture']['status']['short']
-                if status == 'FT':
+                if status in ['FT', 'AET', 'PEN']:
                     ttl = 720
             
             data = await fetch_api(session, "fixtures/events", {"fixture": fixture_id}, use_cache=True, ttl_minutes=ttl)
