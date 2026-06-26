@@ -229,7 +229,10 @@ async def main():
                         text += f"• `{m['matchID']}`: {flag(m['team1']['teamName'])} {res} {flag(m['team2']['teamName'])} ({status})\n"
                         if not m.get('matchIsFinished'): all_done = False
                     
-                    await callback.message.edit_text(text, parse_mode="Markdown")
+                    try:
+                        await callback.message.edit_text(text, parse_mode="Markdown")
+                    except Exception:
+                        await callback.message.answer(text, parse_mode="Markdown")
                     return
             await callback.answer("لا توجد مباريات لهذا اليوم.")
 
