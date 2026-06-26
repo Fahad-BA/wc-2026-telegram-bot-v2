@@ -1,0 +1,14 @@
+[Unit]
+Description=World Cup 2026 Telegram Bot (Private DM)
+After=network.target
+
+[Service]
+Type=simple
+User=fahad
+WorkingDirectory=/home/fahad/wc_bot
+ExecStart=/usr/bin/python3 bot.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
