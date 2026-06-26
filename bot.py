@@ -122,7 +122,6 @@ async def broadcast_summary(bot, session, match):
     home_name = match['team1']['teamName']
     away_name = match['team2']['teamName']
     
-    # OpenLigaDB has matchResults array. Index 1 or specific resultTypeID is usually the final score.
     final_result = next((r for r in match.get('matchResults', []) if r.get('resultTypeID') == 2), None)
     if not final_result:
         final_result = match.get('matchResults', [{}])[0]
@@ -141,14 +140,11 @@ async def monitor_world_cup(bot):
         while True:
             try:
                 sleep_interval = 1800
-                # OpenLigaDB: Get all matches for the tournament
                 data = await fetch_oldb(session, f"getmatchdata/{OLDB_SHORTCUT}/{OLDB_SEASON}")
                 
                 if data and isinstance(data, list):
-                    now = datetime.now()
                     for m in data:
                         is_finished = m.get('matchIsFinished', False)
-                        
                         if is_finished:
                             await broadcast_summary(bot, session, m)
 
@@ -186,15 +182,17 @@ async def main():
     async def handle_date_selection(callback: CallbackQuery):
         date_str = callback.data.split(":")[1]
         async with aiohttp.ClientSession() as session:
-            # OpenLigaDB doesn't have a direct date filter in the URL, we filter local or use cache
+            # We use a longer TTL for full tournament data in local filtering
             data = await fetch_oldb(session, f"getmatchdata/{OLDB_SHORTCUT}/{OLDB_SEASON}", use_cache=True, ttl_minutes=1440)
             if data and isinstance(data, list):
-                matches = [m for m in data if m['matchDateTimeUTC'].startswith(date_str)]
+                # Ensure we handle null matchDateTimeUTC or matchDateTime gracefully
+                matches = [m for m in data if (m.get('matchDateTimeUTC') or m.get('matchDateTime') or '').startswith(date_str)]
                 if matches:
                     text = f"📅 *مباريات يوم {date_str}:*\n\n"
                     all_done = True
                     for m in matches:
-                        final_res = next((r for r in m.get('matchResults', []) if r.get('resultTypeID') == 2), m.get('matchResults', [{}])[0])
+                        results = m.get('matchResults', [])
+                        final_res = next((r for r in results if r.get('resultTypeID') == 2), results[0] if results else {})
                         res = f"{final_res.get('pointsTeam1', '?')} - {final_res.get('pointsTeam2', '?')}"
                         status = "FT" if m.get('matchIsFinished') else "NS"
                         text += f"• `{m['matchID']}`: {m['team1']['teamName']} {res} {m['team2']['teamName']} ({status})\n"
@@ -210,7 +208,7 @@ async def main():
         async with aiohttp.ClientSession() as session:
             data = await fetch_oldb(session, f"getmatchdata/{OLDB_SHORTCUT}/{OLDB_SEASON}", use_cache=True, ttl_minutes=30)
             if data and isinstance(data, list):
-                matches = [m for m in data if m['matchDateTimeUTC'].startswith(today)]
+                matches = [m for m in data if (m.get('matchDateTimeUTC') or m.get('matchDateTime') or '').startswith(today)]
                 if matches:
                     text = "📅 *مباريات اليوم:*\n\n"
                     for m in matches:
@@ -225,12 +223,13 @@ async def main():
         async with aiohttp.ClientSession() as session:
             data = await fetch_oldb(session, f"getmatchdata/{OLDB_SHORTCUT}/{OLDB_SEASON}", use_cache=True, ttl_minutes=30)
             if data and isinstance(data, list):
-                matches = [m for m in data if m['matchDateTimeUTC'].startswith(today) and m.get('matchIsFinished')]
+                matches = [m for m in data if (m.get('matchDateTimeUTC') or m.get('matchDateTime') or '').startswith(today) and m.get('matchIsFinished')]
                 if matches:
                     text = "🏁 *نتائج اليوم:*\n\n"
                     for m in matches:
-                        final_res = next((r for r in m.get('matchResults', []) if r.get('resultTypeID') == 2), m.get('matchResults', [{}])[0])
-                        text += f"{m['team1']['teamName']} {final_res.get('pointsTeam1')} - {final_res.get('pointsTeam2')} {m['team2']['teamName']}\n"
+                        results = m.get('matchResults', [])
+                        final_res = next((r for r in results if r.get('resultTypeID') == 2), results[0] if results else {})
+                        text += f"{m['team1']['teamName']} {final_res.get('pointsTeam1', '?')} - {final_res.get('pointsTeam2', '?')} {m['team2']['teamName']}\n"
                     await message.answer(text, parse_mode="Markdown")
                     return
             await message.answer("لم تنتهِ أي مباريات اليوم بعد.")
