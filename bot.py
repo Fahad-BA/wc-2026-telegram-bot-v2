@@ -205,7 +205,7 @@ async def main():
             builder.add(InlineKeyboardButton(text=btn_text, callback_data=f"oldbdate:{d_str}"))
             curr += timedelta(days=1)
         builder.adjust(4)
-        text = "🏆 *بوت كأس العالم 2026*\n\n/fixtures - مباريات اليوم\n/results - نتائج اليوم\n/lineups <id> - التشكيلة\n/cards <id> - البطاقات\n\nاختر تاريخاً:"
+        text = "🏆 *بوت كأس العالم 2026*\n\n/fixtures - مباريات اليوم\n/results - نتائج اليوم\n/goals <id> - أهداف مباراة\n/lineups <id> - التشكيلة\n/cards <id> - البطاقات\n\nاختر تاريخاً:"
         await message.answer(text, reply_markup=builder.as_markup(), parse_mode="Markdown")
 
     @dp.callback_query(F.data.startswith("oldbdate:"))
@@ -226,7 +226,7 @@ async def main():
                         res = f"{final_res.get('pointsTeam1', '?')} - {final_res.get('pointsTeam2', '?')}"
                         kickoff = riyadh_time(m.get('matchDateTimeUTC') or m.get('matchDateTime'))
                         status = "FT" if m.get('matchIsFinished') else kickoff
-                        text += f"• `{m['matchID']}`: {flag(m['team1']['teamName'])} {res} {flag(m['team2']['teamName'])} ({status})\n"
+                        text += f"• `{m['matchID']}`: 🏠 {flag(m['team1']['teamName'])} {res} {flag(m['team2']['teamName'])} 🏃 ({status})\n"
                         if not m.get('matchIsFinished'): all_done = False
                     
                     try:
@@ -247,7 +247,7 @@ async def main():
                     text = "📅 *مباريات اليوم:*\n\n"
                     for m in matches:
                         kickoff = riyadh_time(m.get('matchDateTimeUTC') or m.get('matchDateTime'))
-                        text += f"ID: `{m['matchID']}` | {kickoff} | {flag(m['team1']['teamName'])} ضد {flag(m['team2']['teamName'])}\n"
+                        text += f"ID: `{m['matchID']}` | {kickoff} | 🏠 {flag(m['team1']['teamName'])} ضد {flag(m['team2']['teamName'])} 🏃\n"
                     await message.answer(text, parse_mode="Markdown")
                     return
             await message.answer("لا توجد مباريات اليوم.")
@@ -264,7 +264,7 @@ async def main():
                     for m in matches:
                         results = m.get('matchResults', [])
                         final_res = next((r for r in results if r.get('resultTypeID') == 2), results[0] if results else {})
-                        text += f"{flag(m['team1']['teamName'])} {final_res.get('pointsTeam1', '?')} - {final_res.get('pointsTeam2', '?')} {flag(m['team2']['teamName'])}\n"
+                        text += f"🏠 {flag(m['team1']['teamName'])} {final_res.get('pointsTeam1', '?')} - {final_res.get('pointsTeam2', '?')} {flag(m['team2']['teamName'])} 🏃\n"
                     await message.answer(text, parse_mode="Markdown")
                     return
             await message.answer("لم تنتهِ أي مباريات اليوم بعد.")
@@ -294,15 +294,29 @@ async def main():
                         await message.answer(f"⚽ *{home} {score} {away}*\n\nلا توجد تفاصيل أهداف متاحة.", parse_mode="Markdown")
                         return
                     kickoff = riyadh_time(match.get('matchDateTimeUTC') or match.get('matchDateTime'))
-                    text = f"⚽ *أهداف: {home} ضد {away}* ({kickoff} توقيت الرياض)\n\n"
-                    for g in goals:
-                        scorer = g.get('goalGetterName', 'غير معروف')
-                        minute = g.get('goalMatchMinute', '??')
-                        team = g.get('teamID')
-                        penalty = " (ركلة جزاء)" if g.get('isPenalty', False) else ""
-                        own = " (هدف عكسي)" if g.get('isOwnGoal', False) else ""
-                        side = "🏠" if team == match['team1'].get('teamID') else "🏃" if team == match['team2'].get('teamID') else ""
-                        text += f"{side} {scorer} ({minute}'){penalty}{own}\n"
+                    t1_id = match['team1'].get('teamId')
+                    t2_id = match['team2'].get('teamId')
+                    text = f"⚽ *{home} ضد {away}* ({kickoff} توقيت الرياض)\n\n"
+                    has_details = any(g.get('goalGetterName') for g in goals)
+                    if has_details:
+                        for g in goals:
+                            scorer = g.get('goalGetterName', 'غير معروف')
+                            minute = g.get('matchMinute') or g.get('goalMatchMinute') or '??'
+                            team = g.get('teamId')
+                            penalty = " (ركلة جزاء)" if g.get('isPenalty', False) else ""
+                            own = " (هدف عكسي)" if g.get('isOwnGoal', False) else ""
+                            side = "🏠" if team == t1_id else "🏃" if team == t2_id else ""
+                            text += f"{side} {scorer} ({minute}'){penalty}{own}\n"
+                    else:
+                        for g in goals:
+                            s1 = g.get('scoreTeam1', 0)
+                            s2 = g.get('scoreTeam2', 0)
+                            side = "🏠" if s1 > s2 else "🏃"
+                            minute = g.get('matchMinute') or '??'
+                            penalty = " (ركلة جزاء)" if g.get('isPenalty', False) else ""
+                            own = " (هدف عكسي)" if g.get('isOwnGoal', False) else ""
+                            text += f"{side} {home if s1 > s2 else away} ({minute}'){penalty}{own} → {s1}-{s2}\n"
+                        text += "\n_تفاصيل الهدافين ستتوفر عند بدء البطولة_"
                     await message.answer(text, parse_mode="Markdown")
                     return
             await message.answer("⚠️ لم يتم العثور على مباراة بهذا الرقم.\nاستخدم /fixtures لعرض المباريات المتاحة.", parse_mode="Markdown")
