@@ -308,22 +308,27 @@ async def main():
                             penalty = " (ركلة جزاء)" if g.get('isPenalty', False) else ""
                             own = " (هدف عكسي)" if g.get('isOwnGoal', False) else ""
                             if g.get('isOwnGoal'):
-                                side = "🏃" if s1 > prev_s1 else "🏠"
+                                side = f"🏃 {away}" if s1 > prev_s1 else f"🏠 {home}"
                             elif s1 > prev_s1:
-                                side = "🏠"
+                                side = f"🏠 {home}"
                             else:
-                                side = "🏃"
+                                side = f"🏃 {away}"
                             prev_s1, prev_s2 = s1, s2
                             text += f"{side} {scorer} ({minute}'){penalty}{own}\n"
                     else:
+                        prev_s1, prev_s2 = 0, 0
                         for g in goals:
                             s1 = g.get('scoreTeam1', 0)
                             s2 = g.get('scoreTeam2', 0)
-                            side = "🏠" if s1 > s2 else "🏃"
+                            if s1 > prev_s1:
+                                side = f"🏠 {home}"
+                            else:
+                                side = f"🏃 {away}"
+                            prev_s1, prev_s2 = s1, s2
                             minute = g.get('matchMinute') or '??'
                             penalty = " (ركلة جزاء)" if g.get('isPenalty', False) else ""
                             own = " (هدف عكسي)" if g.get('isOwnGoal', False) else ""
-                            text += f"{side} {home if s1 > s2 else away} ({minute}'){penalty}{own} → {s1}-{s2}\n"
+                            text += f"{side} ({minute}'){penalty}{own} → {s1}-{s2}\n"
                         text += "\n_⚠️ بيانات الهدافين غير متوفرة في OpenLigaDB لهذه المباراة_"
                     await message.answer(text, parse_mode="Markdown")
                     return
