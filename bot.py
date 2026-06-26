@@ -93,25 +93,15 @@ async def fetch_api(session, endpoint, params=None, use_cache=False, ttl_minutes
         if response.status == 200:
             data = await response.json()
             if use_cache and data:
-                # SMART CACHING LOGIC
-                # If endpoint is 'fixtures' and we're caching a full date
-                if endpoint == "fixtures" and params and 'date' in params:
-                    all_finished = True
-                    for fixture in data.get('response', []):
-                        if fixture['fixture']['status']['short'] not in ['FT', 'AET', 'PEN']:
-                            all_finished = False
-                            break
-                    
-                    # If any match is still not finished, override ttl_minutes to a short interval
-                    # and save with that logic. Note: fetch_api saves current data.
-                    # If not all_finished, next call with use_cache=True and ttl_minutes=-1 
-                    # would still hit cache unless we prevent it.
-                    # The get_cached_data check above already uses ttl_minutes.
-                    # So if we save it now, we just need to make sure subsequent calls 
-                    # for "live" dates don't use ttl_minutes=-1.
-                    pass
-
-                save_cache(cache_key, data)
+                # Check for "No data" or empty responses from API-Football
+                # API-Football often returns an empty list in 'response' when no data exists
+                has_data = data.get('response') and len(data['response']) > 0
+                
+                # NEVER cache "empty" data forever
+                if not has_data and ttl_minutes == -1:
+                    save_cache(cache_key, data) # Still save it, but don't treat it as infinite in the logic below
+                else:
+                    save_cache(cache_key, data)
             return data
         return None
 
@@ -253,27 +243,31 @@ async def main():
         selected_date_str = callback.data.split(":")[1]
         
         async with aiohttp.ClientSession() as session:
-            # Smart TTL Logic: First check if all matches for the date are finished
-            # Note: We must fetch/check current data to decide on TTL.
-            # We'll call fetch_api with a temporary short TTL to check status.
-            temp_data = await fetch_api(session, "fixtures", {"league": WC_2026_LEAGUE_ID, "season": 2026, "date": selected_date_str}, use_cache=True, ttl_minutes=5)
+            # Fix: Ensure query params are exactly as API-Sports expects (league, season, date)
+            params = {"league": WC_2026_LEAGUE_ID, "season": 2026, "date": selected_date_str}
+            
+            # 1. First fetch with a short TTL to verify data existence and status
+            # This avoids "infinite" caching of errors or empty results
+            temp_data = await fetch_api(session, "fixtures", params, use_cache=True, ttl_minutes=5)
             
             all_finished = True
-            if temp_data and temp_data.get('response'):
+            has_data = False
+            if temp_data and temp_data.get('response') and len(temp_data['response']) > 0:
+                has_data = True
                 for fixture in temp_data['response']:
                     if fixture['fixture']['status']['short'] not in ['FT', 'AET', 'PEN']:
                         all_finished = False
                         break
             else:
-                all_finished = False # No data yet or error
+                all_finished = False
             
-            # Now determine final TTL: -1 if all finished, else 5 mins
-            final_ttl = -1 if all_finished else 5
+            # Fix: NEVER use infinite TTL (-1) if matches were empty or missing
+            # Only use it if we have verified matches and they are ALL finished
+            final_ttl = -1 if (has_data and all_finished) else 5
             
-            # Fetch again with the correct TTL (will hit cache if temp_data was within 5 mins and all_finished was True)
-            data = await fetch_api(session, "fixtures", {"league": WC_2026_LEAGUE_ID, "season": 2026, "date": selected_date_str}, use_cache=True, ttl_minutes=final_ttl)
+            data = await fetch_api(session, "fixtures", params, use_cache=True, ttl_minutes=final_ttl)
             
-            if data and data.get('response'):
+            if data and data.get('response') and len(data['response']) > 0:
                 text = f"📅 *Matches on {selected_date_str}:*\n\n"
                 for f in data['response']:
                     home = f['teams']['home']['name']
