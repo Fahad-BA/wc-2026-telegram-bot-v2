@@ -3,8 +3,10 @@ import logging
 import sqlite3
 import aiohttp
 import json
-from aiogram import Bot, Dispatcher, types
+from aiogram import Bot, Dispatcher, types, F
 from aiogram.filters import Command, CommandObject
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, CallbackQuery
+from aiogram.utils.keyboard import InlineKeyboardBuilder
 from datetime import datetime, timedelta
 
 # --- CONFIGURATION ---
@@ -13,6 +15,7 @@ API_KEY = "d74ed4898dd30d9f491f2e33e6a6abbe"
 USER_ID = 697241718  # Direct messages to this User ID
 WC_2026_LEAGUE_ID = 1  # League ID for World Cup 2026
 API_BASE_URL = "https://v3.football.api-sports.io"
+TOURNAMENT_START_DATE = datetime(2026, 6, 11)
 
 # --- DATABASE SETUP ---
 def init_db():
@@ -58,7 +61,8 @@ def get_cached_data(endpoint, ttl_minutes=60):
     if row:
         data_str, updated_at_str = row
         updated_at = datetime.fromisoformat(updated_at_str)
-        if datetime.now() - updated_at < timedelta(minutes=ttl_minutes):
+        # Use a very large TTL for "infinite" caching
+        if ttl_minutes == -1 or (datetime.now() - updated_at < timedelta(minutes=ttl_minutes)):
             return json.loads(data_str)
     return None
 
@@ -200,7 +204,61 @@ async def main():
 
     @dp.message(Command("start"))
     async def start_cmd(message: types.Message):
-        await message.answer("World Cup 2026 Bot active! You will now receive match updates.")
+        await message.answer("World Cup 2026 Bot active! Use /help to see all commands and match history.")
+
+    @dp.message(Command("help"))
+    async def help_cmd(message: types.Message):
+        builder = InlineKeyboardBuilder()
+        current_date = TOURNAMENT_START_DATE
+        today = datetime.now()
+        
+        while current_date <= today:
+            date_str = current_date.strftime('%Y-%m-%d')
+            btn_text = current_date.strftime('%b %d')
+            builder.add(InlineKeyboardButton(text=btn_text, callback_data=f"date:{date_str}"))
+            current_date += timedelta(days=1)
+        
+        builder.adjust(4)
+        text = (
+            "🏆 *World Cup 2026 Bot Help*\n\n"
+            "Commands:\n"
+            "/fixtures - Today's matches\n"
+            "/results - Today's final scores\n"
+            "/lineups <fixture_id> - Get XI\n"
+            "/cards <fixture_id> - Get cards\n\n"
+            "Select a date below to view match history:"
+        )
+        await message.answer(text, reply_markup=builder.as_markup(), parse_mode="Markdown")
+
+    @dp.callback_query(F.data.startswith("date:"))
+    async def handle_date_selection(callback: CallbackQuery):
+        selected_date_str = callback.data.split(":")[1]
+        selected_date = datetime.strptime(selected_date_str, '%Y-%m-%d')
+        today_str = datetime.now().strftime('%Y-%m-%d')
+        
+        # Infinite TTL for past dates, 60 mins for today
+        ttl = -1 if selected_date_str < today_str else 60
+        
+        async with aiohttp.ClientSession() as session:
+            data = await fetch_api(session, "fixtures", {"league": WC_2026_LEAGUE_ID, "season": 2026, "date": selected_date_str}, use_cache=True, ttl_minutes=ttl)
+            
+            if data and data.get('response'):
+                text = f"📅 *Matches on {selected_date_str}:*\n\n"
+                for f in data['response']:
+                    home = f['teams']['home']['name']
+                    away = f['teams']['away']['name']
+                    status = f['fixture']['status']['short']
+                    f_id = f['fixture']['id']
+                    
+                    if status == 'FT':
+                        score = f"{f['goals']['home']} - {f['goals']['away']}"
+                        text += f"• `{f_id}`: {home} {score} {away} (FT)\n"
+                    else:
+                        text += f"• `{f_id}`: {home} vs {away} ({status})\n"
+                
+                await callback.message.edit_text(text, parse_mode="Markdown")
+            else:
+                await callback.answer(f"No match data found for {selected_date_str}.", show_alert=True)
 
     @dp.message(Command("fixtures"))
     async def cmd_fixtures(message: types.Message):
@@ -263,13 +321,12 @@ async def main():
         
         fixture_id = command.args
         async with aiohttp.ClientSession() as session:
-            # First get fixture status to determine TTL
             fix_data = await fetch_api(session, "fixtures", {"id": fixture_id}, use_cache=True, ttl_minutes=5)
-            ttl = 1 # 1 minute if live
+            ttl = 1
             if fix_data and fix_data.get('response'):
                 status = fix_data['response'][0]['fixture']['status']['short']
                 if status == 'FT':
-                    ttl = 720 # 12 hours if finished
+                    ttl = 720
             
             data = await fetch_api(session, "fixtures/events", {"fixture": fixture_id}, use_cache=True, ttl_minutes=ttl)
             
@@ -287,7 +344,6 @@ async def main():
             else:
                 await message.answer("No event data available.")
 
-    # Run monitor and bot polling together
     await asyncio.gather(dp.start_polling(bot), monitor_world_cup(bot))
 
 if __name__ == "__main__":
