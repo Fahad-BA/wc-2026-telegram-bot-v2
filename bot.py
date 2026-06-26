@@ -299,13 +299,21 @@ async def main():
                     text = f"⚽ *{home} ضد {away}* ({kickoff} توقيت الرياض)\n\n"
                     has_details = any(g.get('goalGetterName') for g in goals)
                     if has_details:
+                        prev_s1, prev_s2 = 0, 0
                         for g in goals:
                             scorer = g.get('goalGetterName', 'غير معروف')
-                            minute = g.get('matchMinute') or g.get('goalMatchMinute') or '??'
-                            team = g.get('teamId')
+                            minute = g.get('matchMinute') or '??'
+                            s1 = g.get('scoreTeam1', 0)
+                            s2 = g.get('scoreTeam2', 0)
                             penalty = " (ركلة جزاء)" if g.get('isPenalty', False) else ""
                             own = " (هدف عكسي)" if g.get('isOwnGoal', False) else ""
-                            side = "🏠" if team == t1_id else "🏃" if team == t2_id else ""
+                            if g.get('isOwnGoal'):
+                                side = "🏃" if s1 > prev_s1 else "🏠"
+                            elif s1 > prev_s1:
+                                side = "🏠"
+                            else:
+                                side = "🏃"
+                            prev_s1, prev_s2 = s1, s2
                             text += f"{side} {scorer} ({minute}'){penalty}{own}\n"
                     else:
                         for g in goals:
