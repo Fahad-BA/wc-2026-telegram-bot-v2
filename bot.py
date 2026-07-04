@@ -45,9 +45,12 @@ def flag(name):
     return FLAG_MAP.get(name, name)
 
 # --- CONFIGURATION ---
-BOT_TOKEN = "BOT_TOKEN_REMOVED"
-API_KEY = os.getenv("API_FOOTBALL_KEY", "API_KEY_REMOVED")
-USER_ID = 697241718  # Direct messages to this User ID
+from dotenv import load_dotenv
+load_dotenv()
+
+BOT_TOKEN = os.environ["BOT_TOKEN"]
+API_KEY = os.environ["API_FOOTBALL_KEY"]
+USER_ID = int(os.environ["USER_ID"])
 WC_2026_LEAGUE_ID = 1  # League ID for World Cup 2026
 API_BASE_URL = "https://v3.football.api-sports.io"
 TOURNAMENT_START_DATE = datetime(2026, 6, 11)
